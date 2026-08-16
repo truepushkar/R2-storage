@@ -1,0 +1,4 @@
+# Local development secrets for `wrangler dev`.
+# Copy this file to `.dev.vars` and enter your dev API key.
+
+API_KEY=change-me-to-a-dev-secret

@@ -1,0 +1,25 @@
+# Cloudflare Worker configuration for the R2 Storage API.
+# Copy this file to `wrangler.toml`, fill in your values, then deploy.
+
+name = "r2-storage"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# --- R2 bucket binding -----------------------------------------
+# The Worker code expects the binding to be named `BUCKET`.
+# Create the bucket with:  npx wrangler r2 bucket create <bucket_name>
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "YOUR_BUCKET_NAME"
+
+# --- Scheduled cleanup -----------------------------------------
+# Expired files are deleted when this cron fires.
+# Adjust the schedule to match how aggressively you want old data purged.
+[triggers]
+crons = ["0 */6 * * *"]   # every 6 hours
+
+# ------------------------------------------------------------------
+# DO NOT put your real API_KEY here.
+# Set it as a secret instead:
+#     npx wrangler secret put API_KEY
+# ------------------------------------------------------------------
