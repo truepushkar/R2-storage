@@ -1,6 +1,23 @@
-const VERSION = "3.0.0";
+const VERSION = "4.0.0";
 const BUCKET_NAME = "api";
 const COOKIE_NAME = "session";
+
+const PUBLIC_UPLOAD_PATH = "/public/upload";
+const PUBLIC_PREFIX = "/f/";
+const PUBLIC_EXPIRY = "7d";
+const PUBLIC_MAX_BYTES = 100 * 1024 * 1024;
+
+/* Types that must never render inline from this origin. */
+const UNSAFE_INLINE_TYPES = [
+  "text/html",
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "text/xml",
+  "application/xml",
+  "text/javascript",
+  "application/javascript",
+  "application/x-javascript",
+];
 
 const EXPIRATIONS = {
   "1h": 60 * 60,
@@ -51,6 +68,32 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/docs") {
         return docsPage();
+      }
+
+      if (
+        url.pathname === PUBLIC_UPLOAD_PATH &&
+        (request.method === "PUT" || request.method === "POST")
+      ) {
+        return await publicUpload(request, env, url);
+      }
+
+      if (
+        url.pathname.startsWith(PUBLIC_PREFIX) &&
+        (request.method === "GET" || request.method === "HEAD")
+      ) {
+        const id = decodeURIComponent(url.pathname.slice(PUBLIC_PREFIX.length));
+
+        const wantsBytes =
+          url.searchParams.has("raw") || url.searchParams.has("download");
+
+        const wantsPage =
+          request.method === "GET" &&
+          !wantsBytes &&
+          (request.headers.get("Accept") || "").includes("text/html");
+
+        return wantsPage
+          ? await publicPreview(request, env, id, url)
+          : await publicDownload(request, env, id);
       }
 
       if (request.method === "POST" && url.pathname === "/auth/login") {
@@ -338,6 +381,7 @@ async function uploadRaw(request, env, url) {
     size: contentLength || "0",
     uploadedAt: String(uploadedAt),
     expiresAt: expiresAt === null ? "never" : String(expiresAt),
+    visibility: "private",
   };
 
   /* Streams directly into R2 — no buffering, no size cap. */
@@ -426,6 +470,7 @@ async function uploadMultipart(request, env, url) {
       size: String(file.size),
       uploadedAt: String(uploadedAt),
       expiresAt: expiresAt === null ? "never" : String(expiresAt),
+      visibility: "private",
     },
   });
 
@@ -444,6 +489,263 @@ async function uploadMultipart(request, env, url) {
     },
     201
   );
+}
+
+/* ============================================================
+   PUBLIC UPLOAD
+   ============================================================ */
+
+function publicUploadsEnabled(env) {
+  return String(env.PUBLIC_UPLOADS ?? "true").toLowerCase() !== "false";
+}
+
+function safeServeType(contentType) {
+  const base = String(contentType || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  if (UNSAFE_INLINE_TYPES.includes(base)) return "application/octet-stream";
+  return contentType || "application/octet-stream";
+}
+
+function mustDownload(contentType) {
+  const base = String(contentType || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  return UNSAFE_INLINE_TYPES.includes(base);
+}
+
+async function publicUpload(request, env, url) {
+  if (!publicUploadsEnabled(env)) {
+    return json({ error: { message: "Public uploads are turned off." } }, 403);
+  }
+
+  const declared = Number(request.headers.get("Content-Length") || "0");
+
+  if (declared > PUBLIC_MAX_BYTES) {
+    return json(
+      {
+        error: {
+          message: `File is too large. The limit is ${formatBytes(
+            PUBLIC_MAX_BYTES
+          )}.`,
+          max_bytes: PUBLIC_MAX_BYTES,
+        },
+      },
+      413
+    );
+  }
+
+  const requestType = request.headers.get("Content-Type") || "";
+
+  let body;
+  let filename;
+  let declaredType;
+  let size;
+
+  if (requestType.toLowerCase().includes("multipart/form-data")) {
+    const form = await request.formData();
+    const file = form.get("file");
+
+    if (!(file instanceof File)) {
+      return json({ error: { message: 'Missing "file" field.' } }, 400);
+    }
+
+    if (file.size > PUBLIC_MAX_BYTES) {
+      return json(
+        {
+          error: {
+            message: `File is too large. The limit is ${formatBytes(
+              PUBLIC_MAX_BYTES
+            )}.`,
+            max_bytes: PUBLIC_MAX_BYTES,
+          },
+        },
+        413
+      );
+    }
+
+    body = file.stream();
+    filename = sanitizeFilename(file.name || "file");
+    declaredType = file.type || "application/octet-stream";
+    size = file.size;
+  } else {
+    if (!request.body) {
+      return json({ error: { message: "Request body is empty." } }, 400);
+    }
+
+    /* R2 needs a known length for a streamed body, and without one the
+       size cap is unenforceable. Reject chunked uploads here. */
+    if (!declared) {
+      return json({ error: { message: "Content-Length is required." } }, 411);
+    }
+
+    body = request.body;
+    filename = sanitizeFilename(
+      url.searchParams.get("filename") ||
+        request.headers.get("X-Filename") ||
+        "file"
+    );
+    declaredType = requestType || "application/octet-stream";
+    size = declared;
+  }
+
+  const storedType = safeServeType(declaredType);
+  const id = generateId();
+  const key = `files/${id}`;
+  const uploadedAt = Date.now();
+  const expiresAt = uploadedAt + EXPIRATIONS[PUBLIC_EXPIRY] * 1000;
+
+  await env.BUCKET.put(key, body, {
+    httpMetadata: {
+      contentType: storedType,
+      contentDisposition: buildContentDisposition(
+        filename,
+        mustDownload(declaredType)
+      ),
+      cacheControl: "public, max-age=31536000, immutable",
+    },
+    customMetadata: {
+      originalName: filename,
+      contentType: storedType,
+      size: String(size),
+      uploadedAt: String(uploadedAt),
+      expiresAt: String(expiresAt),
+      visibility: "public",
+      source: "public-upload",
+    },
+  });
+
+  return json(
+    {
+      object: "file",
+      status: "complete",
+      id,
+      name: filename,
+      size,
+      content_type: storedType,
+      uploaded_at: new Date(uploadedAt).toISOString(),
+      expires_at: new Date(expiresAt).toISOString(),
+      url: `${url.origin}${PUBLIC_PREFIX}${encodeURIComponent(id)}`,
+      download_url: `${url.origin}${PUBLIC_PREFIX}${encodeURIComponent(
+        id
+      )}?download=1`,
+    },
+    201
+  );
+}
+
+/* ============================================================
+   PUBLIC DOWNLOAD
+   ============================================================ */
+
+async function publicDownload(request, env, id) {
+  const isHead = request.method === "HEAD";
+
+  const missing = () =>
+    isHead
+      ? new Response(null, {
+          status: 404,
+          headers: { ...CORS_HEADERS, ...SECURITY_HEADERS },
+        })
+      : json({ error: { message: "File not found." } }, 404);
+
+  if (!id || id.includes("/") || id.includes("\\")) return missing();
+
+  const key = `files/${id}`;
+
+  const object = isHead
+    ? await env.BUCKET.head(key)
+    : await env.BUCKET.get(key, { range: request.headers });
+
+  /* Private files stay private, even if someone guesses this route. */
+  if (!object || object.customMetadata?.visibility !== "public") {
+    return missing();
+  }
+
+  if (isExpired(object)) {
+    await env.BUCKET.delete(key);
+
+    return isHead
+      ? new Response(null, {
+          status: 410,
+          headers: { ...CORS_HEADERS, ...SECURITY_HEADERS },
+        })
+      : json({ error: { message: "This link has expired." } }, 410);
+  }
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("ETag", object.httpEtag);
+  headers.set("Accept-Ranges", "bytes");
+  headers.set("Cache-Control", "public, max-age=31536000, immutable");
+
+  const storedType = object.customMetadata?.contentType || "";
+  const filename = sanitizeFilename(object.customMetadata?.originalName || id);
+  const forced = mustDownload(storedType);
+  const asked = new URL(request.url).searchParams.has("download");
+
+  headers.set("Content-Type", safeServeType(storedType));
+  headers.set(
+    "Content-Disposition",
+    buildContentDisposition(filename, forced || asked)
+  );
+
+  if (typeof object.size === "number") {
+    headers.set("Content-Length", String(object.size));
+  }
+
+  let status = 200;
+
+  if (!isHead && object.range && typeof object.range.offset === "number") {
+    const start = object.range.offset;
+    const end = start + object.range.length - 1;
+    headers.set("Content-Range", `bytes ${start}-${end}/${object.size}`);
+    status = 206;
+  }
+
+  return new Response(isHead ? null : object.body, {
+    status,
+    headers: {
+      ...Object.fromEntries(headers.entries()),
+      ...CORS_HEADERS,
+      ...SECURITY_HEADERS,
+    },
+  });
+}
+
+/* ============================================================
+   PUBLIC PREVIEW
+   ============================================================ */
+
+async function publicPreview(request, env, id, url) {
+  if (!id || id.includes("/") || id.includes("\\")) return notFoundPage();
+
+  const key = `files/${id}`;
+  const object = await env.BUCKET.head(key);
+
+  if (!object || object.customMetadata?.visibility !== "public") {
+    return notFoundPage();
+  }
+
+  if (isExpired(object)) {
+    await env.BUCKET.delete(key);
+    return expiredPage();
+  }
+
+  const metadata = object.customMetadata || {};
+  const expiresAt = Number(metadata.expiresAt);
+
+  return previewPage({
+    id,
+    name: metadata.originalName || id,
+    type: metadata.contentType || "application/octet-stream",
+    size: Number(object.size || metadata.size || 0),
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+  });
 }
 
 /* ============================================================
@@ -489,6 +791,8 @@ async function listFiles(env, url) {
     if (search && !name.toLowerCase().includes(search)) continue;
     if (type && !mime.toLowerCase().includes(type)) continue;
 
+    const isPublic = metadata.visibility === "public";
+
     files.push({
       id,
       key: object.key,
@@ -500,6 +804,8 @@ async function listFiles(env, url) {
         : object.uploaded.toISOString(),
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
       etag: object.httpEtag,
+      visibility: isPublic ? "public" : "private",
+      public_url: isPublic ? `/f/${encodeURIComponent(id)}` : null,
       download_url: `/api/files/${encodeURIComponent(id)}`,
     });
   }
@@ -544,6 +850,7 @@ async function getStats(env) {
   let files = 0;
   let bytes = 0;
   let expired = 0;
+  let publicFiles = 0;
 
   do {
     const result = await env.BUCKET.list({
@@ -567,6 +874,7 @@ async function getStats(env) {
       }
 
       files++;
+      if (metadata.visibility === "public") publicFiles++;
       bytes += Number(object.size || metadata.size || 0);
     }
 
@@ -576,6 +884,7 @@ async function getStats(env) {
   return json({
     object: "stats",
     files,
+    public_files: publicFiles,
     bytes,
     formatted_bytes: formatBytes(bytes),
     expired,
@@ -816,6 +1125,27 @@ function formatBytes(bytes) {
   );
 }
 
+function htmlEscape(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function relativeTime(timestamp) {
+  if (!timestamp) return "no expiry";
+
+  const diff = timestamp - Date.now();
+  if (diff <= 0) return "expired";
+
+  const hours = Math.floor(diff / 3600000);
+  if (hours < 1) return `expires in ${Math.max(1, Math.floor(diff / 60000))} minutes`;
+  if (hours < 48) return `expires in ${hours} hours`;
+  return `expires in ${Math.floor(hours / 24)} days`;
+}
+
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
@@ -830,827 +1160,1048 @@ function json(data, status = 200, extraHeaders = {}) {
 }
 
 /* ============================================================
-   SHARED DESIGN TOKENS
+   SHARED HEAD / DESIGN TOKENS
    ============================================================ */
 
-const FAVICON = `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230a0b0d'/%3E%3Cpath d='M9 20a5 5 0 0 1 .9-9.9A6.5 6.5 0 0 1 22.5 12 4.5 4.5 0 0 1 22 20.5H9z' fill='none' stroke='%237ddba3' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">`;
+const FAVICON = `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23070b12'/%3E%3Cpath d='M9 21a5 5 0 0 1 .9-9.9A6.5 6.5 0 0 1 22.5 13 4.5 4.5 0 0 1 22 21.5H9z' fill='none' stroke='%23f38020' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">`;
 
-const FONT_LINKS = `<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">`;
+const TAILWIND_CONFIG = `tailwind.config = {
+  darkMode: "class",
+  theme: {
+    extend: {
+      colors: {
+        "primary": "#f38020",
+        "primary-container": "#ea580c",
+        "primary-fixed": "#fdba74",
+        "primary-fixed-dim": "#fb923c",
+        "inverse-primary": "#c2410c",
+        "secondary": "#38bdf8",
+        "tertiary": "#38bdf8",
+        "tertiary-fixed": "#7dd3fc",
+        "background": "#070b12",
+        "surface": "#070b12",
+        "surface-deep": "#070b12",
+        "surface-base": "#0a0f1d",
+        "surface-card": "#0d1527",
+        "surface-raised": "#131e33",
+        "surface-container": "#0f172a",
+        "surface-container-high": "#17233c",
+        "surface-variant": "#1e293b",
+        "border-subtle": "#152033",
+        "border-highlight": "#1e2d4a",
+        "outline": "#475569",
+        "text-primary": "#f8fafc",
+        "text-secondary": "#94a3b8",
+        "text-muted": "#64748b",
+        "on-surface": "#f1f5f9",
+        "on-surface-variant": "#94a3b8",
+        "on-primary": "#ffffff",
+        "error": "#ffb4ab",
+        "method-get": "#38bdf8",
+        "method-post": "#fbbf24",
+        "method-put": "#f38020",
+        "method-delete": "#f87171",
+        "accent-glow": "rgba(243, 128, 32, 0.16)"
+      },
+      borderRadius: { DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", full: "9999px" },
+      spacing: {
+        "space-2xs": "0.25rem",
+        "space-xs": "0.5rem",
+        "space-sm": "0.75rem",
+        "space-md": "1rem",
+        "space-lg": "1.5rem",
+        "space-xl": "2rem",
+        "space-2xl": "3rem",
+        "space-3xl": "4.5rem",
+        "space-4xl": "6rem",
+        "gutter-mobile": "1rem",
+        "gutter-desktop": "1.5rem",
+        "container-max": "1140px"
+      },
+      fontFamily: {
+        "display-hero": ["Outfit"],
+        "headline-lg": ["Outfit"],
+        "headline-md": ["Outfit"],
+        "headline-sm": ["Outfit"],
+        "body-lg": ["Outfit"],
+        "body-md": ["Outfit"],
+        "body-sm": ["Outfit"],
+        "caption": ["Outfit"],
+        "eyebrow": ["JetBrains Mono"],
+        "label-code-md": ["JetBrains Mono"],
+        "label-code-lg": ["JetBrains Mono"]
+      },
+      fontSize: {
+        "display-hero": ["56px", { lineHeight: "64px", letterSpacing: "-0.03em", fontWeight: "700" }],
+        "headline-lg": ["36px", { lineHeight: "44px", letterSpacing: "-0.02em", fontWeight: "600" }],
+        "headline-md": ["24px", { lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "600" }],
+        "headline-sm": ["18px", { lineHeight: "26px", letterSpacing: "-0.005em", fontWeight: "600" }],
+        "body-lg": ["16px", { lineHeight: "26px", fontWeight: "400" }],
+        "body-md": ["14px", { lineHeight: "22px", fontWeight: "400" }],
+        "body-sm": ["13px", { lineHeight: "18px", fontWeight: "400" }],
+        "caption": ["12px", { lineHeight: "16px", fontWeight: "400" }],
+        "eyebrow": ["11px", { lineHeight: "16px", letterSpacing: "0.12em", fontWeight: "600" }],
+        "label-code-md": ["12px", { lineHeight: "18px", fontWeight: "500" }],
+        "label-code-lg": ["14px", { lineHeight: "20px", letterSpacing: "-0.01em", fontWeight: "500" }]
+      }
+    }
+  }
+};`;
 
-const GRAIN = `body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  pointer-events: none;
-  opacity: .035;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
-}`;
-
-const BASE_CSS = `
-:root {
-  color-scheme: dark;
-  --bg: #0a0b0d;
-  --surface: #101318;
-  --surface-2: #161b21;
-  --border: #1f2630;
-  --border-strong: #2b3541;
-  --text: #e8edf2;
-  --muted: #8a95a3;
-  --faint: #5b6673;
-  --accent: #7ddba3;
-  --accent-dim: rgba(125, 219, 163, .09);
-  --accent-ink: #0a120c;
-  --danger: #e56a77;
-  --danger-dim: rgba(229, 106, 119, .08);
-  --warn: #d9b45b;
-  --warn-dim: rgba(217, 180, 91, .08);
-  --radius-lg: 18px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
-  --font: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+const BASE_STYLE = `@layer base {
+  html, body { margin: 0; padding: 0; }
+  body { overscroll-behavior-y: none; }
 }
 
-* { box-sizing: border-box; }
+::selection { background: #f38020; color: #fff; }
 
-html { scroll-behavior: smooth; }
-
-body {
-  margin: 0;
-  min-height: 100dvh;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 15px;
-  line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-}
-
-${GRAIN}
-
-::selection {
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-
-a { color: inherit; }
-
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
+:focus-visible { outline: 2px solid #f38020; outline-offset: 2px; border-radius: 4px; }
 
 .skip {
   position: absolute;
   left: -9999px;
   top: 0;
+  z-index: 100;
   padding: 10px 16px;
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: #f38020;
+  color: #fff;
   font-weight: 600;
-  z-index: 3000;
-  border-radius: 0 0 var(--radius-sm) 0;
+  border-radius: 0 0 8px 0;
 }
 
 .skip:focus { left: 0; }
 
-.mono {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
+.material-symbols-outlined {
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  user-select: none;
 }
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(14px); }
+  from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.rise { animation: rise .55s cubic-bezier(.22,.8,.3,1) both; }
-.rise-1 { animation-delay: .05s; }
-.rise-2 { animation-delay: .14s; }
-.rise-3 { animation-delay: .23s; }
-.rise-4 { animation-delay: .32s; }
+.rise { animation: rise .35s cubic-bezier(.22,.8,.3,1) both; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important;
     transition-duration: .01ms !important;
   }
-  html { scroll-behavior: auto; }
+}`;
+
+const HEAD_ASSETS = `<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap" rel="stylesheet">
+${FAVICON}
+<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+<script>${TAILWIND_CONFIG}</script>
+<style>${BASE_STYLE}</style>`;
+
+const SITE_HEADER = `<header class="fixed top-0 left-0 right-0 z-50 bg-surface-deep/85 backdrop-blur-xl border-b border-border-subtle">
+  <div class="h-16 max-w-[1140px] mx-auto px-gutter-mobile lg:px-gutter-desktop flex items-center justify-between">
+    <a class="flex items-center gap-space-xs transition-opacity hover:opacity-90" href="/">
+      <div class="w-8 h-8 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center">
+        <span class="material-symbols-outlined text-primary text-[18px]">cloud_sync</span>
+      </div>
+      <span class="font-headline-sm text-headline-sm text-text-primary tracking-tight">Content Delivery</span>
+    </a>
+
+    <nav class="hidden md:flex items-center gap-space-xl">
+      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/#share">Share a file</a>
+      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/#features">Features</a>
+      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/#api">API</a>
+      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/docs">Docs</a>
+    </nav>
+
+    <div class="flex items-center gap-space-md">
+      <a class="px-space-md py-space-xs rounded-lg bg-primary text-white font-headline-sm text-body-sm hover:bg-primary-container transition-all shadow-md shadow-primary/20" href="/dashboard">Dashboard</a>
+    </div>
+  </div>
+</header>`;
+
+const SITE_FOOTER = `<footer class="w-full bg-surface-base border-t border-border-subtle py-space-xl mt-space-3xl">
+  <div class="max-w-[1140px] mx-auto px-gutter-mobile lg:px-gutter-desktop flex flex-col sm:flex-row items-center justify-between gap-space-md text-center sm:text-left">
+    <div class="flex items-center gap-space-xs text-text-muted font-body-sm text-body-sm">
+      <span class="material-symbols-outlined text-[16px] text-primary">bolt</span>
+      <span>Content Delivery — Cloudflare Workers + R2</span>
+    </div>
+    <div class="flex items-center gap-space-lg">
+      <a class="font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors" href="/docs">Documentation</a>
+      <a class="font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors" href="/dashboard">Dashboard</a>
+    </div>
+  </div>
+</footer>`;
+
+function htmlPage(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      ...SECURITY_HEADERS,
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
 }
-`;
 
 /* ============================================================
    PUBLIC WEBSITE
    ============================================================ */
 
 function publicPage() {
-  return new Response(
+  return htmlPage(
 `<!DOCTYPE html>
-<html lang="en">
+<html class="dark" lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Content Delivery — private file storage on the edge</title>
-<meta name="description" content="Upload once. Deliver from the edge. A private storage API backed by Cloudflare R2 with expiring links, streaming uploads, and a clean dashboard.">
-${FAVICON}
-${FONT_LINKS}
-<style>
-${BASE_CSS}
-
-.container {
-  width: min(1180px, calc(100% - 40px));
-  margin: 0 auto;
-}
-
-.nav {
-  height: 72px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-  font-weight: 700;
-  font-size: 16px;
-  letter-spacing: -.01em;
-}
-
-.brand svg { display: block; }
-
-.navLinks {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.navLinks a {
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-size: 13.5px;
-  font-weight: 500;
-  text-decoration: none;
-  transition: color .18s, background .18s;
-}
-
-.navLinks a:hover {
-  color: var(--text);
-  background: rgba(255,255,255,.04);
-}
-
-.navLinks a.cta {
-  color: var(--accent-ink);
-  background: var(--accent);
-  font-weight: 600;
-  margin-left: 6px;
-}
-
-.navLinks a.cta:hover { background: #8fe6b4; }
-.navLinks a.cta:active { transform: translateY(1px); }
-
-.hero {
-  position: relative;
-  padding: 84px 0 110px;
-}
-
-.hero::before {
-  content: "";
-  position: absolute;
-  top: -120px;
-  left: -180px;
-  width: 640px;
-  height: 640px;
-  background: radial-gradient(closest-side, rgba(125,219,163,.09), transparent);
-  pointer-events: none;
-}
-
-.heroGrid {
-  display: grid;
-  grid-template-columns: 1.15fr .85fr;
-  gap: 72px;
-  align-items: center;
-}
-
-.eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-
-.eyebrow::before {
-  content: "";
-  width: 22px;
-  height: 1px;
-  background: var(--accent);
-}
-
-h1 {
-  margin: 20px 0 18px;
-  font-size: clamp(44px, 5.6vw, 68px);
-  font-weight: 800;
-  line-height: 1.02;
-  letter-spacing: -.04em;
-  text-wrap: balance;
-}
-
-h1 em {
-  font-style: normal;
-  color: var(--accent);
-}
-
-.heroText {
-  max-width: 34rem;
-  color: var(--muted);
-  font-size: 16.5px;
-  line-height: 1.75;
-  text-wrap: pretty;
-}
-
-.heroActions {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  margin-top: 32px;
-  flex-wrap: wrap;
-}
-
-.button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
-  border-radius: var(--radius-sm);
-  font-weight: 600;
-  font-size: 14px;
-  text-decoration: none;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: transform .16s, background .16s, border-color .16s;
-}
-
-.button.primary {
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-
-.button.primary:hover { background: #8fe6b4; transform: translateY(-1px); }
-.button.primary:active { transform: translateY(1px) scale(.99); }
-
-.button.ghost {
-  color: var(--text);
-  border-color: var(--border-strong);
-  background: transparent;
-}
-
-.button.ghost:hover { border-color: var(--faint); transform: translateY(-1px); }
-.button.ghost:active { transform: translateY(1px); }
-
-.heroMeta {
-  display: flex;
-  gap: 28px;
-  margin-top: 44px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border);
-}
-
-.heroMeta div { font-size: 12.5px; color: var(--faint); }
-.heroMeta strong {
-  display: block;
-  font-family: var(--mono);
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 2px;
-}
-
-.auth {
-  position: relative;
-  padding: 30px;
-  border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, var(--surface-2), var(--surface));
-  border: 1px solid var(--border);
-  box-shadow:
-    0 40px 80px -30px rgba(3, 8, 5, .9),
-    inset 0 1px 0 rgba(255,255,255,.04);
-}
-
-.auth::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(160deg, rgba(125,219,163,.45), transparent 40%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-}
-
-.authTop {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.authTop svg { color: var(--accent); flex: none; }
-
-.auth h2 {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -.01em;
-}
-
-.auth .hint {
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-.input {
-  width: 100%;
-  margin-top: 18px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: #0b0e12;
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
-  outline: none;
-  transition: border-color .16s, box-shadow .16s;
-}
-
-.input::placeholder { color: var(--faint); }
-
-.input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
-
-.loginButton {
-  width: 100%;
-  margin-top: 12px;
-  padding: 12px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font: inherit;
-  font-weight: 700;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background .16s, transform .12s;
-}
-
-.loginButton:hover { background: #8fe6b4; }
-.loginButton:active { transform: translateY(1px) scale(.99); }
-.loginButton:disabled { opacity: .55; cursor: wait; }
-
-#error {
-  display: none;
-  margin-top: 14px;
-  padding: 10px 12px;
-  border: 1px solid rgba(229,106,119,.35);
-  border-radius: var(--radius-sm);
-  background: var(--danger-dim);
-  color: #f0a6ae;
-  font-size: 13px;
-}
-
-.section { padding: 30px 0 90px; }
-
-.sectionLabel {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-
-.sectionTitle {
-  margin: 12px 0 10px;
-  font-size: clamp(28px, 3.4vw, 38px);
-  font-weight: 700;
-  letter-spacing: -.03em;
-  line-height: 1.1;
-  text-wrap: balance;
-}
-
-.sectionText {
-  max-width: 36rem;
-  color: var(--muted);
-  line-height: 1.7;
-  text-wrap: pretty;
-}
-
-.features {
-  margin-top: 48px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.feature {
-  display: grid;
-  grid-template-columns: 44px 1fr 1.4fr;
-  gap: 20px;
-  align-items: center;
-  padding: 22px 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  transition: border-color .2s, transform .2s;
-}
-
-.feature:hover {
-  border-color: var(--border-strong);
-  transform: translateX(4px);
-}
-
-.feature:nth-child(even) {
-  margin-left: clamp(0px, 6vw, 90px);
-  background: var(--surface-2);
-}
-
-.featureIcon {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  background: var(--accent-dim);
-  color: var(--accent);
-  flex: none;
-}
-
-.feature h3 {
-  margin: 0;
-  font-size: 15.5px;
-  font-weight: 600;
-  letter-spacing: -.01em;
-}
-
-.feature p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.65;
-}
-
-.endpoint {
-  margin-top: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  overflow: hidden;
-}
-
-.endpointHead {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.method {
-  padding: 3px 8px;
-  border-radius: 5px;
-  background: var(--accent-dim);
-  color: var(--accent);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: .04em;
-}
-
-.path {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--text);
-}
-
-pre {
-  margin: 0;
-  padding: 16px 18px;
-  overflow-x: auto;
-  background: #07090c;
-  color: #b9c6d2;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-pre + pre { border-top: 1px solid var(--border); }
-
-.footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 28px 0 48px;
-  border-top: 1px solid var(--border);
-  color: var(--faint);
-  font-size: 12.5px;
-}
-
-.footer a {
-  color: var(--muted);
-  text-decoration: none;
-  transition: color .16s;
-}
-
-.footer a:hover { color: var(--text); }
-
-.footerLinks { display: flex; gap: 20px; }
-
-@media (max-width: 880px) {
-  .heroGrid { grid-template-columns: 1fr; gap: 48px; }
-  .feature { grid-template-columns: 44px 1fr; }
-  .feature p { grid-column: 2; }
-  .feature:nth-child(even) { margin-left: 0; }
-  .navLinks a:not(.cta) { display: none; }
-}
-</style>
+<title>Content Delivery — share files from the edge</title>
+<meta name="description" content="Drop a file, get a link. A private storage API backed by Cloudflare R2 with expiring links, streaming uploads, and a public uploader.">
+${HEAD_ASSETS}
 </head>
-<body>
+<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
 
 <a class="skip" href="#main">Skip to content</a>
 
-<div class="container">
+${SITE_HEADER}
 
-<nav class="nav">
-  <a href="/" class="brand" aria-label="Content Delivery home">
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#7ddba3" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
-      <path d="M6.5 17a4.5 4.5 0 0 1 .8-8.9A5.5 5.5 0 0 1 18 9.6 3.8 3.8 0 0 1 17.5 17h-11z"/>
-    </svg>
-    Content Delivery
-  </a>
+<main id="main" class="w-full pt-16 bg-surface-deep">
+<div class="relative w-full overflow-hidden">
 
-  <div class="navLinks">
-    <a href="#features">Features</a>
-    <a href="#api">API</a>
-    <a href="/docs">Docs</a>
-    <a href="/dashboard" class="cta">Dashboard</a>
+<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[360px] bg-primary/15 blur-[130px] pointer-events-none rounded-full"></div>
+<div class="absolute top-96 -left-32 w-80 h-80 bg-tertiary/10 blur-[100px] pointer-events-none rounded-full"></div>
+
+<!-- SECTION 1: PUBLIC UPLOAD -->
+<section id="share" class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop pt-space-2xl pb-space-3xl relative">
+  <div class="flex flex-col items-start max-w-2xl mb-space-xl">
+    <div class="inline-flex items-center gap-space-xs px-space-sm py-1 rounded-full bg-surface-raised border border-border-subtle mb-space-sm">
+      <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+      <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-widest">Public upload</span>
+    </div>
+
+    <h1 class="font-display-hero text-headline-lg lg:text-display-hero text-text-primary tracking-tight mb-space-xs font-bold">
+      Drop a file, get a link
+    </h1>
+
+    <p class="font-body-lg text-body-lg text-text-secondary leading-relaxed">
+      No key needed for this one. Files land on Cloudflare R2 and get a link anyone can
+      open in the browser. Everything here deletes itself after seven days.
+    </p>
   </div>
-</nav>
 
-<main id="main">
+  <div class="relative rounded-2xl bg-surface-card border border-border-subtle p-space-sm sm:p-space-lg shadow-2xl transition-all duration-300 hover:border-border-highlight group">
+    <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent"></div>
 
-<section class="hero">
-  <div class="heroGrid">
+    <div id="drop-target" tabindex="0" role="button" aria-label="Choose files to upload"
+      class="relative flex flex-col items-center justify-center p-space-xl sm:p-space-3xl rounded-xl border-2 border-dashed border-border-subtle bg-surface-deep/90 hover:border-primary/60 hover:bg-primary/5 transition-all duration-200 cursor-pointer text-center">
 
-    <div>
-      <div class="eyebrow rise">Private R2 storage</div>
+      <input id="file-input" type="file" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" aria-label="Choose files">
 
-      <h1 class="rise rise-1">
-        Upload once.<br>
-        <em>Deliver from the edge.</em>
-      </h1>
+      <div class="w-14 h-14 rounded-2xl bg-surface-raised border border-border-highlight flex items-center justify-center mb-space-md group-hover:scale-105 transition-transform duration-200 shadow-inner">
+        <span class="material-symbols-outlined text-primary text-[28px]">upload_file</span>
+      </div>
 
-      <p class="heroText rise rise-2">
-        A private file API backed by Cloudflare R2. Push any file,
-        pick an expiration, and get a URL back — stream it, share it,
-        or manage everything from the dashboard.
+      <p class="font-headline-sm text-headline-sm text-text-primary mb-1">Drop files here</p>
+      <p class="font-body-md text-body-md text-text-secondary mb-space-lg">
+        or <span class="text-primary font-medium underline underline-offset-4 decoration-primary/40 group-hover:decoration-primary">browse</span> — you can paste from the clipboard too
       </p>
 
-      <div class="heroActions rise rise-3">
-        <a class="button primary" href="/dashboard">
-          Open dashboard
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-        </a>
-        <a class="button ghost" href="/docs">API documentation</a>
-      </div>
-
-      <div class="heroMeta rise rise-4">
-        <div><strong>PUT</strong>single-call upload</div>
-        <div><strong>1h – ∞</strong>per-file expiration</div>
-        <div><strong>206</strong>range streaming</div>
+      <div class="flex flex-wrap items-center justify-center gap-y-2 gap-x-space-md text-text-muted font-body-sm text-body-sm pt-space-md border-t border-border-subtle/70 w-full max-w-lg">
+        <span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-text-muted/60"></span>Link expires in 7 days</span>
+        <span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-text-muted/60"></span>100 MB per file</span>
+        <span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-text-muted/60"></span>Anyone with the link can view or download</span>
       </div>
     </div>
 
-    <div class="auth rise rise-2">
-      <div class="authTop">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-          <rect x="4" y="10" width="16" height="10" rx="2.5"/>
-          <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
-        </svg>
+    <div id="queue" class="mt-space-sm space-y-space-xs" aria-live="polite"></div>
+
+    <div id="links-panel" class="hidden">
+      <div class="mt-space-lg pt-space-lg border-t border-border-subtle/80 flex flex-col md:flex-row md:items-center justify-between gap-space-md">
+        <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-space-sm">
+          <span class="font-headline-sm text-body-md font-semibold text-text-primary">Your links</span>
+          <span class="font-body-sm text-body-sm text-text-muted">Kept in this browser only. Expired ones disappear on their own.</span>
+        </div>
+        <button id="clear-links-btn" type="button" class="self-start md:self-auto px-space-sm py-1 rounded text-body-sm font-body-sm text-text-muted hover:text-method-delete transition-colors flex items-center gap-1">
+          <span class="material-symbols-outlined text-[16px]">delete_sweep</span>
+          Clear all
+        </button>
+      </div>
+
+      <div id="links" class="mt-space-sm space-y-space-xs"></div>
+    </div>
+  </div>
+</section>
+
+<!-- SECTION 2: PRIVATE STORAGE + LOGIN -->
+<section class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-2xl relative">
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-space-xl items-start">
+
+    <div class="lg:col-span-7 flex flex-col items-start">
+      <div class="flex items-center gap-2 mb-space-sm">
+        <span class="h-[1px] w-5 bg-primary"></span>
+        <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Private R2 storage</span>
+      </div>
+
+      <h2 class="font-display-hero text-headline-lg lg:text-display-hero text-text-primary leading-[1.08] tracking-tight font-bold mb-space-md">
+        Upload once.<br>
+        <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary via-primary-fixed-dim to-tertiary">Deliver from the edge.</span>
+      </h2>
+
+      <p class="font-body-lg text-body-lg text-text-secondary max-w-xl mb-space-xl leading-relaxed">
+        A private file API backed by Cloudflare R2. Push any file, pick an expiration, and get
+        a URL back — stream it, share it, or manage everything from the dashboard.
+      </p>
+
+      <div class="flex flex-wrap items-center gap-space-sm mb-space-2xl">
+        <a class="px-space-lg py-space-sm rounded-lg bg-primary text-white font-headline-sm text-body-md hover:bg-primary-container transition-all inline-flex items-center gap-space-xs shadow-lg shadow-primary/20 hover:shadow-primary/30" href="#share">
+          <span>Share a file</span>
+          <span class="material-symbols-outlined text-[18px]">arrow_upward</span>
+        </a>
+        <a class="px-space-lg py-space-sm rounded-lg bg-surface-card border border-border-subtle text-text-primary font-headline-sm text-body-md hover:border-border-highlight hover:bg-surface-raised transition-all" href="/dashboard">Open dashboard</a>
+        <a class="px-space-md py-space-sm text-text-secondary hover:text-text-primary font-body-md text-body-md transition-colors flex items-center gap-1" href="/docs">
+          <span>API documentation</span>
+          <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+        </a>
+      </div>
+
+      <div class="grid grid-cols-3 gap-space-md sm:gap-space-lg w-full max-w-lg pt-space-lg border-t border-border-subtle">
         <div>
-          <h2>Dashboard login</h2>
-          <p class="hint">Authenticate with your API key</p>
+          <div class="font-label-code-lg text-headline-md text-primary font-bold">PUT</div>
+          <div class="font-body-sm text-caption text-text-muted mt-0.5">single-call upload</div>
+        </div>
+        <div>
+          <div class="font-label-code-lg text-headline-md text-text-primary font-bold">1h – ∞</div>
+          <div class="font-body-sm text-caption text-text-muted mt-0.5">per-file expiration</div>
+        </div>
+        <div>
+          <div class="font-label-code-lg text-headline-md text-tertiary font-bold">206</div>
+          <div class="font-body-sm text-caption text-text-muted mt-0.5">range streaming</div>
         </div>
       </div>
+    </div>
 
-      <form id="loginForm" novalidate>
-        <label for="token" style="position:absolute;left:-9999px">API key</label>
-        <input
-          id="token"
-          class="input mono"
-          type="password"
-          placeholder="Paste your API key"
-          autocomplete="current-password"
-          required
-        >
-        <button class="loginButton" type="submit">Sign in</button>
-      </form>
+    <div class="lg:col-span-5 w-full">
+      <div class="rounded-2xl bg-surface-card border border-border-subtle p-space-lg lg:p-space-xl relative shadow-2xl">
+        <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent"></div>
 
-      <div id="error" role="alert"></div>
+        <div class="flex items-center gap-space-sm mb-space-sm">
+          <div class="w-9 h-9 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary">
+            <span class="material-symbols-outlined text-[20px]">lock</span>
+          </div>
+          <div>
+            <h3 class="font-headline-md text-headline-sm text-text-primary font-semibold">Dashboard login</h3>
+            <p class="font-body-sm text-caption text-text-muted">Authenticate with your API key</p>
+          </div>
+        </div>
+
+        <form id="login-form" class="mt-space-lg space-y-space-md" novalidate>
+          <div class="space-y-space-xs">
+            <label class="block font-label-code-md text-caption text-text-secondary uppercase tracking-wider" for="api-key-input">API key</label>
+            <div class="relative">
+              <input id="api-key-input" type="password" autocomplete="current-password" placeholder="Paste your API key"
+                class="w-full h-11 px-space-md pr-10 rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-label-code-md text-body-sm placeholder:text-text-muted focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+              <button id="reveal-key" type="button" aria-label="Show or hide the key"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors">
+                <span class="material-symbols-outlined text-[18px]">visibility</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="login-error" class="hidden rounded-lg border border-method-delete/40 bg-method-delete/10 px-space-md py-space-xs font-body-sm text-body-sm text-method-delete" role="alert"></div>
+
+          <button id="login-button" type="submit"
+            class="w-full h-11 rounded-lg bg-primary text-white font-headline-sm text-body-md font-semibold hover:bg-primary-container transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/20 disabled:opacity-60">
+            <span id="login-label">Sign in</span>
+            <span class="material-symbols-outlined text-[18px]">login</span>
+          </button>
+        </form>
+
+        <div class="mt-space-md pt-space-md border-t border-border-subtle flex items-center justify-between text-caption text-text-muted font-label-code-md">
+          <span class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-method-put"></span>
+            CF Workers R2 · TLS 1.3
+          </span>
+          <a class="text-text-secondary hover:text-primary transition-colors" href="/docs">Read the docs</a>
+        </div>
+      </div>
     </div>
 
   </div>
 </section>
 
-<section id="features" class="section">
-  <div class="sectionLabel">Features</div>
-  <h2 class="sectionTitle">Storage built around the API, not the other way round</h2>
-  <p class="sectionText">
-    Everything is private by default. The Worker holds the only key,
-    R2 holds the bytes, and every operation is one HTTP call.
-  </p>
+<!-- SECTION 3: FEATURES -->
+<section id="features" class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-3xl relative">
+  <div class="flex flex-col items-start max-w-2xl mb-space-2xl">
+    <div class="flex items-center gap-2 mb-space-xs">
+      <span class="h-[1px] w-5 bg-primary"></span>
+      <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Features</span>
+    </div>
+    <h2 class="font-headline-lg text-headline-lg text-text-primary font-semibold tracking-tight mb-space-xs">
+      Storage built around the API, not the other way round
+    </h2>
+    <p class="font-body-lg text-body-md sm:text-body-lg text-text-secondary leading-relaxed">
+      Private by default. The Worker holds the only key, R2 holds the bytes, and every
+      operation is one HTTP call.
+    </p>
+  </div>
 
-  <div class="features">
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-space-md">
 
-    <div class="feature">
-      <div class="featureIcon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17c3-1 5-6 8-6s5 5 8 4"/><path d="M4 7c3 1 5 6 8 6s5-5 8-4"/></svg>
+    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
+      <div>
+        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-[20px]">air</span>
+        </div>
+        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Streaming end to end</h3>
+        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
+          Request bodies pipe straight into R2 with no buffering and no size cap. Downloads
+          support HTTP range requests for seeking and resuming.
+        </p>
       </div>
-      <h3>Streaming end to end</h3>
-      <p>Request bodies pipe straight into R2 with no buffering and no size cap. Downloads support HTTP range requests for seeking and resuming.</p>
+      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-method-get">
+        <span>RFC 7233 · byte ranges</span>
+      </div>
     </div>
 
-    <div class="feature">
-      <div class="featureIcon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
+      <div>
+        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-[20px]">schedule</span>
+        </div>
+        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Per-file expiration</h3>
+        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
+          One hour to ninety days, or never. A scheduled sweep removes expired objects
+          automatically.
+        </p>
       </div>
-      <h3>Per-file expiration</h3>
-      <p>One hour to ninety days, or never. A scheduled sweep removes expired objects automatically.</p>
+      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-primary">
+        <span>Cron-driven cleanup</span>
+      </div>
     </div>
 
-    <div class="feature">
-      <div class="featureIcon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></svg>
+    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
+      <div>
+        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-[20px]">ios_share</span>
+        </div>
+        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Public sharing</h3>
+        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
+          The uploader above needs no key. Those files get a seven-day link under /f/ with a
+          browser preview page, and never mix with your private ones.
+        </p>
       </div>
-      <h3>Search and sorting</h3>
-      <p>Filter by filename or MIME type, sort by name, size, or upload time — all server-side.</p>
+      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-method-post">
+        <span>Read-gated by metadata</span>
+      </div>
     </div>
 
-    <div class="feature">
-      <div class="featureIcon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="8" height="8" rx="1.5"/><rect x="13" y="4" width="8" height="8" rx="1.5"/><rect x="3" y="14" width="8" height="6" rx="1.5"/><rect x="13" y="14" width="8" height="6" rx="1.5"/></svg>
+    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
+      <div>
+        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-[20px]">manage_search</span>
+        </div>
+        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Search and sorting</h3>
+        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
+          Filter by filename or MIME type, sort by name, size, or upload time — all
+          server-side.
+        </p>
       </div>
-      <h3>Bulk management</h3>
-      <p>Select any set of files and remove them in a single API call, up to a thousand at a time.</p>
+      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-text-muted">
+        <span>Cursor pagination</span>
+      </div>
     </div>
 
-    <div class="feature">
-      <div class="featureIcon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg>
+    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
+      <div>
+        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-[20px]">dataset</span>
+        </div>
+        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Bulk management</h3>
+        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
+          Select any set of files and remove them in a single API call, up to a thousand at a
+          time.
+        </p>
       </div>
-      <h3>API-first</h3>
-      <p>The dashboard is a convenience, not a requirement. Every action maps to a documented REST endpoint.</p>
+      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-method-delete">
+        <span>Batch delete · 1,000 max</span>
+      </div>
     </div>
 
-    <div class="feature">
-      <div class="featureIcon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
+      <div>
+        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-[20px]">terminal</span>
+        </div>
+        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">API-first</h3>
+        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
+          The dashboard is a convenience, not a requirement. Every action maps to a documented
+          REST endpoint.
+        </p>
       </div>
-      <h3>Private by default</h3>
-      <p>Nothing is public. Every read and write passes through Bearer authentication on the Worker.</p>
+      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-tertiary">
+        <span>Plain HTTP · no SDK</span>
+      </div>
     </div>
 
   </div>
 </section>
 
-<section id="api" class="section">
-  <div class="sectionLabel">Quick start</div>
-  <h2 class="sectionTitle">Simple requests, predictable responses</h2>
-
-  <div class="endpoint">
-    <div class="endpointHead">
-      <span class="method">PUT</span>
-      <span class="path">/api/upload</span>
+<!-- SECTION 4: QUICK START -->
+<section id="api" class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop pt-space-xl pb-space-3xl relative">
+  <div class="flex flex-col items-start max-w-2xl mb-space-xl">
+    <div class="flex items-center gap-2 mb-space-xs">
+      <span class="h-[1px] w-5 bg-primary"></span>
+      <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Quick start</span>
     </div>
-    <pre><code>curl -X PUT \
-  "https://cdn.pushkarsingh4343.workers.dev/api/upload?filename=photo.jpg&expires=7d" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: image/jpeg" \
-  --data-binary "@photo.jpg"</code></pre>
-  <pre><code>{
-  "object": "file",
-  "status": "complete",
-  "id": "a4e3c1…",
-  "name": "photo.jpg",
-  "download_url": "https://cdn.pushkarsingh4343.workers.dev/api/files/a4e3c1…"
+    <h2 class="font-headline-lg text-headline-lg text-text-primary font-semibold tracking-tight mb-space-xs">
+      Simple requests, predictable responses
+    </h2>
+    <p class="font-body-lg text-body-md sm:text-body-lg text-text-secondary">
+      Talk to R2 over plain HTTP, without an SDK in the way.
+    </p>
+  </div>
+
+  <div class="rounded-2xl bg-surface-base border border-border-subtle overflow-hidden shadow-2xl">
+    <div class="flex items-center justify-between border-b border-border-subtle bg-surface-deep px-space-md py-space-xs overflow-x-auto">
+      <div class="flex items-center gap-space-xs">
+        <button type="button" data-tab="tab-upload" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors bg-surface-raised text-primary border border-border-highlight">
+          <span class="px-1.5 py-0.5 rounded bg-primary/20 text-primary font-bold text-[10px]">PUT</span>
+          <span>/api/upload</span>
+        </button>
+        <button type="button" data-tab="tab-public" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-raised border border-transparent">
+          <span class="px-1.5 py-0.5 rounded bg-primary/20 text-primary font-bold text-[10px]">PUT</span>
+          <span>/public/upload</span>
+        </button>
+        <button type="button" data-tab="tab-files" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-raised border border-transparent">
+          <span class="px-1.5 py-0.5 rounded bg-tertiary/20 text-tertiary font-bold text-[10px]">GET</span>
+          <span>/api/files</span>
+        </button>
+        <button type="button" data-tab="tab-file-id" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-raised border border-transparent">
+          <span class="px-1.5 py-0.5 rounded bg-tertiary/20 text-tertiary font-bold text-[10px]">GET</span>
+          <span>/f/:id</span>
+        </button>
+      </div>
+
+      <button id="global-copy-btn" type="button" class="shrink-0 ml-space-md px-space-sm py-1 rounded bg-surface-raised border border-border-subtle text-text-secondary hover:text-primary transition-colors flex items-center gap-1.5 font-label-code-md text-caption">
+        <span class="material-symbols-outlined text-[15px]">content_copy</span>
+        <span>Copy</span>
+      </button>
+    </div>
+
+    <div class="tab-pane block p-space-lg space-y-space-md" id="tab-upload">
+      <div>
+        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Request</div>
+        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-primary">curl</span> -X PUT \\
+  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/upload?filename=photo.jpg&amp;expires=7d"</span> \\
+  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
+  -H <span class="text-tertiary">"Content-Type: image/jpeg"</span> \\
+  --data-binary <span class="text-text-secondary">"@photo.jpg"</span></code></pre>
+      </div>
+      <div>
+        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Response</div>
+        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code>{
+  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>,
+  <span class="text-tertiary">"status"</span>: <span class="text-primary-fixed-dim">"complete"</span>,
+  <span class="text-tertiary">"id"</span>: <span class="text-primary-fixed-dim">"a4e3c1…"</span>,
+  <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"photo.jpg"</span>,
+  <span class="text-tertiary">"download_url"</span>: <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/files/a4e3c1…"</span>
 }</code></pre>
-  </div>
-
-  <div class="endpoint">
-    <div class="endpointHead">
-      <span class="method">GET</span>
-      <span class="path">/api/files</span>
+      </div>
     </div>
-    <pre><code>curl \
-  "https://cdn.pushkarsingh4343.workers.dev/api/files?search=photo&sort=size&order=desc" \
-  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
-  </div>
 
-  <div class="endpoint">
-    <div class="endpointHead">
-      <span class="method">GET</span>
-      <span class="path">/api/files/:id</span>
+    <div class="tab-pane hidden p-space-lg space-y-space-md" id="tab-public">
+      <div>
+        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Request · no auth header</div>
+        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-primary">curl</span> -X PUT \\
+  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/public/upload?filename=notes.txt"</span> \\
+  -H <span class="text-tertiary">"Content-Type: text/plain"</span> \\
+  --data-binary <span class="text-text-secondary">"@notes.txt"</span></code></pre>
+      </div>
+      <div>
+        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Response</div>
+        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code>{
+  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>,
+  <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"notes.txt"</span>,
+  <span class="text-tertiary">"expires_at"</span>: <span class="text-primary-fixed-dim">"…"</span>,
+  <span class="text-tertiary">"url"</span>: <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/f/abc123…"</span>
+}</code></pre>
+      </div>
     </div>
-    <pre><code>curl \
-  "https://cdn.pushkarsingh4343.workers.dev/api/files/FILE_ID" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -o file</code></pre>
+
+    <div class="tab-pane hidden p-space-lg space-y-space-md" id="tab-files">
+      <div>
+        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Request · search and sort</div>
+        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-tertiary">curl</span> \\
+  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/files?search=photo&amp;sort=size&amp;order=desc"</span> \\
+  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span></code></pre>
+      </div>
+    </div>
+
+    <div class="tab-pane hidden p-space-lg space-y-space-md" id="tab-file-id">
+      <div>
+        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Public file · preview or raw bytes</div>
+        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-text-secondary"># a browser gets the preview page</span>
+<span class="text-primary-fixed-dim">https://cdn.pushkarsingh4343.workers.dev/f/FILE_ID</span>
+
+<span class="text-text-secondary"># curl gets the bytes</span>
+<span class="text-tertiary">curl</span> <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/f/FILE_ID"</span> -o file</code></pre>
+      </div>
+    </div>
   </div>
 </section>
-
-</main>
-
-<footer class="footer">
-  <span>Content Delivery — Cloudflare Workers + R2</span>
-  <div class="footerLinks">
-    <a href="/docs">Documentation</a>
-    <a href="/dashboard">Dashboard</a>
-  </div>
-</footer>
 
 </div>
+</main>
+
+${SITE_FOOTER}
 
 <script>
-document
-  .getElementById("loginForm")
-  .addEventListener("submit", async (event) => {
+/* ---------- API tabs ---------- */
+
+(function () {
+  var tabs = document.querySelectorAll(".api-tab");
+  var active = "bg-surface-raised text-primary border-border-highlight".split(" ");
+  var idle = "text-text-secondary border-transparent".split(" ");
+
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      document.querySelectorAll(".tab-pane").forEach(function (pane) {
+        pane.classList.add("hidden");
+        pane.classList.remove("block");
+      });
+
+      var target = document.getElementById(tab.getAttribute("data-tab"));
+      if (target) {
+        target.classList.remove("hidden");
+        target.classList.add("block");
+      }
+
+      tabs.forEach(function (other) {
+        active.forEach(function (name) { other.classList.remove(name); });
+        idle.forEach(function (name) { other.classList.add(name); });
+      });
+
+      idle.forEach(function (name) { tab.classList.remove(name); });
+      active.forEach(function (name) { tab.classList.add(name); });
+    });
+  });
+
+  document.getElementById("global-copy-btn").addEventListener("click", function () {
+    var pane = document.querySelector(".tab-pane.block");
+    if (!pane) return;
+
+    var button = this;
+    var original = button.innerHTML;
+
+    navigator.clipboard.writeText(pane.innerText.trim()).then(function () {
+      button.innerHTML =
+        '<span class="material-symbols-outlined text-[15px] text-primary">check</span><span class="text-primary">Copied</span>';
+      setTimeout(function () { button.innerHTML = original; }, 1600);
+    });
+  });
+})();
+
+/* ---------- dashboard login ---------- */
+
+(function () {
+  var form = document.getElementById("login-form");
+  var input = document.getElementById("api-key-input");
+  var error = document.getElementById("login-error");
+  var button = document.getElementById("login-button");
+  var label = document.getElementById("login-label");
+
+  document.getElementById("reveal-key").addEventListener("click", function () {
+    input.type = input.type === "password" ? "text" : "password";
+    this.querySelector("span").textContent =
+      input.type === "password" ? "visibility" : "visibility_off";
+  });
+
+  form.addEventListener("submit", function (event) {
     event.preventDefault();
 
-    const token = document.getElementById("token").value;
-    const error = document.getElementById("error");
-    const button = event.target.querySelector("button");
+    var token = input.value.trim();
+    error.classList.add("hidden");
 
-    error.style.display = "none";
-
-    if (!token.trim()) {
+    if (!token) {
       error.textContent = "Enter your API key to continue.";
-      error.style.display = "block";
+      error.classList.remove("hidden");
       return;
     }
 
     button.disabled = true;
-    button.textContent = "Signing in…";
+    label.textContent = "Signing in…";
 
-    try {
-      const response = await fetch("/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ token }),
+    fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ token: token }),
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error((data.error && data.error.message) || "Login failed.");
+          return data;
+        });
+      })
+      .then(function () {
+        location.href = "/dashboard";
+      })
+      .catch(function (err) {
+        error.textContent = err.message;
+        error.classList.remove("hidden");
+        button.disabled = false;
+        label.textContent = "Sign in";
       });
+  });
+})();
 
-      const data = await response.json();
+/* ---------- public uploader ---------- */
 
-      if (!response.ok) {
-        throw new Error(data.error?.message || "Login failed.");
+(function () {
+  var MAX_BYTES = 100 * 1024 * 1024;
+  var STORE = "cdn.links.v1";
+
+  var target = document.getElementById("drop-target");
+  var picker = document.getElementById("file-input");
+  var queue = document.getElementById("queue");
+  var panel = document.getElementById("links-panel");
+  var box = document.getElementById("links");
+
+  var waiting = [];
+  var busy = false;
+
+  var ROW =
+    "flex items-center justify-between gap-space-sm p-space-sm rounded-lg bg-surface-deep/90 border border-border-subtle text-body-sm rise";
+  var PILL =
+    "w-7 h-7 rounded bg-surface-raised border border-border-subtle flex items-center justify-center text-text-secondary hover:text-primary transition-colors shrink-0";
+
+  function esc(value) {
+    var div = document.createElement("div");
+    div.textContent = String(value == null ? "" : value);
+    return div.innerHTML;
+  }
+
+  function size(bytes) {
+    bytes = Number(bytes) || 0;
+    if (!bytes) return "0 B";
+    var units = ["B", "KB", "MB", "GB", "TB"];
+    var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + " " + units[i];
+  }
+
+  function glyph(type) {
+    type = String(type || "").toLowerCase();
+    if (type.indexOf("image/") === 0) return "image";
+    if (type.indexOf("video/") === 0) return "movie";
+    if (type.indexOf("audio/") === 0) return "graphic_eq";
+    if (type.indexOf("pdf") > -1) return "picture_as_pdf";
+    if (type.indexOf("zip") > -1 || type.indexOf("compressed") > -1) return "folder_zip";
+    if (type.indexOf("json") > -1 || type.indexOf("text/") === 0) return "terminal";
+    return "draft";
+  }
+
+  function remaining(iso) {
+    if (!iso) return "no expiry";
+    var diff = Date.parse(iso) - Date.now();
+    if (diff <= 0) return "expired";
+
+    var hours = Math.floor(diff / 3600000);
+    if (hours < 1) return "expires in " + Math.max(1, Math.floor(diff / 60000)) + "m";
+    if (hours < 48) return "expires in " + hours + "h";
+    return "expires in " + Math.floor(hours / 24) + "d";
+  }
+
+  function read() {
+    try {
+      var raw = localStorage.getItem(STORE);
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function write(list) {
+    try { localStorage.setItem(STORE, JSON.stringify(list)); } catch (error) {}
+  }
+
+  function live(list) {
+    var now = Date.now();
+    return list.filter(function (entry) {
+      if (!entry || !entry.id || !entry.url) return false;
+      if (!entry.expires_at) return true;
+      return Date.parse(entry.expires_at) > now;
+    });
+  }
+
+  function remember(entry) {
+    var list = live(read()).filter(function (item) { return item.id !== entry.id; });
+    list.unshift(entry);
+    if (list.length > 100) list.length = 100;
+    write(list);
+    render();
+  }
+
+  function forget(id) {
+    write(live(read()).filter(function (item) { return item.id !== id; }));
+    render();
+  }
+
+  function shortId(id) {
+    return String(id || "").slice(0, 6);
+  }
+
+  function row(entry) {
+    var card = document.createElement("div");
+    card.className = ROW;
+
+    card.innerHTML =
+      '<div class="flex items-center gap-space-sm min-w-0">' +
+        '<div class="w-8 h-8 rounded bg-surface-raised border border-border-highlight flex items-center justify-center shrink-0">' +
+          '<span class="material-symbols-outlined text-primary text-[18px]">' + glyph(entry.content_type) + '</span>' +
+        '</div>' +
+        '<div class="min-w-0">' +
+          '<p class="text-text-primary font-medium truncate">' + esc(entry.name) + '</p>' +
+          '<div class="flex items-center gap-space-xs font-label-code-md text-caption text-text-muted">' +
+            '<span>' + size(entry.size) + '</span><span>&bull;</span>' +
+            '<span class="text-primary font-normal">' + esc(remaining(entry.expires_at)) + '</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    var right = document.createElement("div");
+    right.className = "flex items-center gap-space-xs shrink-0";
+
+    var open = document.createElement("a");
+    open.href = entry.url;
+    open.target = "_blank";
+    open.rel = "noopener";
+    open.title = "Open preview";
+    open.className =
+      "hidden sm:flex px-space-sm py-1 rounded bg-surface-raised border border-border-subtle font-label-code-md text-caption text-method-get hover:border-primary transition-colors items-center gap-1";
+    open.innerHTML =
+      '<span>/f/' + esc(shortId(entry.id)) + '</span><span class="material-symbols-outlined text-[14px]">open_in_new</span>';
+
+    var save = document.createElement("a");
+    save.href = entry.url + "?download=1";
+    save.setAttribute("download", entry.name || "");
+    save.title = "Download file";
+    save.className = PILL;
+    save.innerHTML = '<span class="material-symbols-outlined text-[16px]">download</span>';
+
+    var copy = document.createElement("button");
+    copy.type = "button";
+    copy.title = "Copy link";
+    copy.className = PILL;
+    copy.innerHTML = '<span class="material-symbols-outlined text-[16px]">content_copy</span>';
+    copy.addEventListener("click", function () {
+      var mark = function () {
+        copy.innerHTML = '<span class="material-symbols-outlined text-[16px] text-primary">check</span>';
+        setTimeout(function () {
+          copy.innerHTML = '<span class="material-symbols-outlined text-[16px]">content_copy</span>';
+        }, 1500);
+      };
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(entry.url).then(mark, mark);
+      } else {
+        window.prompt("Copy this link", entry.url);
       }
+    });
 
-      location.href = "/dashboard";
-    } catch (err) {
-      error.textContent = err.message;
-      error.style.display = "block";
-      button.disabled = false;
-      button.textContent = "Sign in";
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.title = "Forget this link";
+    remove.className = PILL + " hover:text-method-delete";
+    remove.innerHTML = '<span class="material-symbols-outlined text-[16px]">close</span>';
+    remove.addEventListener("click", function () { forget(entry.id); });
+
+    right.appendChild(open);
+    right.appendChild(save);
+    right.appendChild(copy);
+    right.appendChild(remove);
+    card.appendChild(right);
+
+    return card;
+  }
+
+  function render() {
+    var list = live(read());
+    write(list);
+
+    if (!list.length) {
+      panel.classList.add("hidden");
+      box.innerHTML = "";
+      return;
+    }
+
+    panel.classList.remove("hidden");
+    box.innerHTML = "";
+    list.forEach(function (entry) { box.appendChild(row(entry)); });
+  }
+
+  document.getElementById("clear-links-btn").addEventListener("click", function () {
+    if (!confirm("Forget every saved link in this browser? The files stay online until they expire.")) return;
+    write([]);
+    render();
+  });
+
+  /* ---------- picking files ---------- */
+
+  target.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      picker.click();
     }
   });
+
+  picker.addEventListener("change", function () {
+    enqueue(picker.files);
+    picker.value = "";
+  });
+
+  ["dragenter", "dragover"].forEach(function (name) {
+    target.addEventListener(name, function (event) {
+      event.preventDefault();
+      target.classList.add("border-primary", "bg-primary/5");
+    });
+  });
+
+  target.addEventListener("dragleave", function (event) {
+    if (!target.contains(event.relatedTarget)) {
+      target.classList.remove("border-primary", "bg-primary/5");
+    }
+  });
+
+  target.addEventListener("drop", function (event) {
+    event.preventDefault();
+    target.classList.remove("border-primary", "bg-primary/5");
+    if (event.dataTransfer && event.dataTransfer.files.length) {
+      enqueue(event.dataTransfer.files);
+    }
+  });
+
+  document.addEventListener("paste", function (event) {
+    if (!event.clipboardData || !event.clipboardData.files.length) return;
+    enqueue(event.clipboardData.files);
+  });
+
+  ["dragover", "drop"].forEach(function (name) {
+    window.addEventListener(name, function (event) {
+      if (!target.contains(event.target)) event.preventDefault();
+    });
+  });
+
+  function enqueue(list) {
+    for (var i = 0; i < list.length; i++) waiting.push(list[i]);
+    pump();
+  }
+
+  function pump() {
+    if (busy || !waiting.length) return;
+    busy = true;
+    send(waiting.shift(), function () {
+      busy = false;
+      pump();
+    });
+  }
+
+  function send(file, done) {
+    var card = document.createElement("div");
+    card.className = "p-space-sm rounded-lg bg-surface-deep/90 border border-border-subtle text-body-sm rise";
+
+    card.innerHTML =
+      '<div class="flex items-center justify-between gap-space-sm">' +
+        '<div class="flex items-center gap-space-sm min-w-0">' +
+          '<div class="w-8 h-8 rounded bg-surface-raised border border-border-highlight flex items-center justify-center shrink-0">' +
+            '<span class="material-symbols-outlined text-primary text-[18px]">' + glyph(file.type) + '</span>' +
+          '</div>' +
+          '<div class="min-w-0">' +
+            '<p class="text-text-primary font-medium truncate">' + esc(file.name) + '</p>' +
+            '<div class="font-label-code-md text-caption text-text-muted">' + size(file.size) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="state font-label-code-md text-caption text-text-secondary shrink-0">waiting</div>' +
+      '</div>' +
+      '<div class="track mt-space-sm h-1 rounded-full bg-surface-raised overflow-hidden">' +
+        '<i class="fill block h-full w-0 bg-primary transition-all duration-200"></i>' +
+      '</div>';
+
+    queue.insertBefore(card, queue.firstChild);
+
+    var state = card.querySelector(".state");
+    var track = card.querySelector(".track");
+    var fill = card.querySelector(".fill");
+
+    function fail(message) {
+      card.classList.add("border-method-delete/40");
+      track.remove();
+      state.textContent = "failed";
+      state.classList.remove("text-text-secondary");
+      state.classList.add("text-method-delete");
+
+      var note = document.createElement("p");
+      note.className = "mt-space-xs font-body-sm text-body-sm text-method-delete";
+      note.textContent = message;
+      card.appendChild(note);
+    }
+
+    if (file.size > MAX_BYTES) {
+      fail("Over the 100 MB limit — this one is " + size(file.size) + ".");
+      done();
+      return;
+    }
+
+    state.textContent = "0%";
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("PUT", "/public/upload?filename=" + encodeURIComponent(file.name));
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+
+    xhr.upload.onprogress = function (event) {
+      if (!event.lengthComputable) return;
+      var percent = Math.round((event.loaded / event.total) * 100);
+      fill.style.width = percent + "%";
+      state.textContent = percent + "%";
+    };
+
+    xhr.onload = function () {
+      var data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (error) {}
+
+      if (xhr.status >= 200 && xhr.status < 300 && data.url) {
+        card.parentNode.removeChild(card);
+        remember({
+          id: data.id,
+          name: data.name,
+          size: data.size,
+          content_type: data.content_type,
+          url: data.url,
+          expires_at: data.expires_at,
+        });
+      } else {
+        fail((data.error && data.error.message) || "Upload failed. Try again.");
+      }
+
+      done();
+    };
+
+    xhr.onerror = function () {
+      fail("Connection dropped before the upload finished.");
+      done();
+    };
+
+    xhr.send(file);
+  }
+
+  render();
+  setInterval(render, 60000);
+})();
 </script>
 
 </body>
-</html>`,
-    {
-      headers: {
-        ...SECURITY_HEADERS,
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
-    }
+</html>`
   );
 }
 
@@ -1658,434 +2209,574 @@ document
    DOCUMENTATION
    ============================================================ */
 
+function methodBadge(method) {
+  const tone = {
+    GET: "bg-tertiary/20 text-tertiary",
+    PUT: "bg-primary/20 text-primary",
+    POST: "bg-method-post/20 text-method-post",
+    DELETE: "bg-method-delete/20 text-method-delete",
+  }[method] || "bg-surface-raised text-text-secondary";
+
+  return `<span class="px-1.5 py-0.5 rounded ${tone} font-bold text-[10px] font-label-code-md">${method}</span>`;
+}
+
+function endpointCard({ method, path, tag = "", note = "", blocks = [] }) {
+  const body = blocks
+    .map(
+      (block) => `<div>
+        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">${block.label}</div>
+        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code>${block.code}</code></pre>
+      </div>`
+    )
+    .join("\n");
+
+  return `<div class="rounded-xl bg-surface-card border border-border-subtle overflow-hidden mb-space-md">
+  <div class="flex items-center gap-space-sm px-space-lg py-space-sm border-b border-border-subtle bg-surface-base">
+    ${methodBadge(method)}
+    <span class="font-label-code-lg text-body-sm text-text-primary">${path}</span>
+    ${
+      tag
+        ? `<span class="ml-auto font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">${tag}</span>`
+        : ""
+    }
+  </div>
+  <div class="p-space-lg space-y-space-md">
+    ${
+      note
+        ? `<p class="font-body-md text-body-md text-text-secondary leading-relaxed">${note}</p>`
+        : ""
+    }
+    ${body}
+  </div>
+</div>`;
+}
+
 function docsPage() {
-  return new Response(
+  const code = (value) =>
+    `<code class="px-1.5 py-0.5 rounded bg-surface-raised border border-border-subtle font-label-code-md text-caption text-primary">${value}</code>`;
+
+  return htmlPage(
 `<!DOCTYPE html>
-<html lang="en">
+<html class="dark" lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>API documentation — Content Delivery</title>
 <meta name="description" content="REST API reference for Content Delivery: uploads, expiration, listing, downloads, stats, and deletion.">
-${FAVICON}
-${FONT_LINKS}
-<style>
-${BASE_CSS}
-
-.container {
-  width: min(880px, calc(100% - 40px));
-  margin: 0 auto;
-  padding: 24px 0 80px;
-}
-
-.nav {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 56px;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  font-size: 15.5px;
-  letter-spacing: -.01em;
-  text-decoration: none;
-}
-
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  text-decoration: none;
-  font-size: 13px;
-  font-weight: 500;
-  transition: color .16s, border-color .16s;
-}
-
-.back:hover { color: var(--text); border-color: var(--faint); }
-
-.hero { margin-bottom: 40px; }
-
-.hero h1 {
-  margin: 0 0 12px;
-  font-size: clamp(34px, 5vw, 46px);
-  font-weight: 800;
-  letter-spacing: -.035em;
-  line-height: 1.05;
-}
-
-.hero p {
-  color: var(--muted);
-  line-height: 1.75;
-  max-width: 40rem;
-  text-wrap: pretty;
-}
-
-.notice {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 16px 18px;
-  border: 1px solid rgba(125,219,163,.3);
-  border-radius: var(--radius-md);
-  background: var(--accent-dim);
-  color: #a9e8c4;
-  font-size: 13.5px;
-  line-height: 1.7;
-  margin-bottom: 32px;
-}
-
-.notice svg { flex: none; margin-top: 2px; color: var(--accent); }
-
-.notice code {
-  font-family: var(--mono);
-  font-size: 12px;
-  background: rgba(0,0,0,.3);
-  padding: 2px 6px;
-  border-radius: 5px;
-}
-
-h2.group {
-  margin: 44px 0 14px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  color: var(--faint);
-  font-family: var(--mono);
-}
-
-.card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--surface);
-  margin-bottom: 14px;
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.method {
-  padding: 3px 8px;
-  border-radius: 5px;
-  background: var(--accent-dim);
-  color: var(--accent);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: .04em;
-}
-
-.method.post { background: rgba(120,170,255,.1); color: #8fbdf5; }
-.method.delete { background: var(--danger-dim); color: var(--danger); }
-
-.path { font-family: var(--mono); font-size: 12.5px; }
-
-.body { padding: 4px 0 0; }
-
-.body .note {
-  padding: 14px 18px 0;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.65;
-}
-
-.body .note code {
-  font-family: var(--mono);
-  font-size: 12px;
-  background: rgba(255,255,255,.05);
-  padding: 1px 5px;
-  border-radius: 4px;
-}
-
-pre {
-  margin: 14px 0 0;
-  padding: 16px 18px;
-  overflow-x: auto;
-  background: #07090c;
-  color: #b9c6d2;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-pre + pre { border-top: 1px solid var(--border); }
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th, td {
-  text-align: left;
-  padding: 10px 18px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-}
-
-tr:last-child td { border-bottom: none; }
-
-th {
-  color: var(--faint);
-  font-weight: 500;
-  font-size: 11px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-
-td code {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent);
-}
-
-.footer {
-  margin-top: 56px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border);
-  color: var(--faint);
-  font-size: 12.5px;
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.footer a { color: var(--muted); text-decoration: none; }
-.footer a:hover { color: var(--text); }
-</style>
+${HEAD_ASSETS}
 </head>
-<body>
+<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
 
 <a class="skip" href="#main">Skip to content</a>
 
-<div class="container">
+${SITE_HEADER}
 
-<nav class="nav">
-  <a href="/" class="brand">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7ddba3" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
-      <path d="M6.5 17a4.5 4.5 0 0 1 .8-8.9A5.5 5.5 0 0 1 18 9.6 3.8 3.8 0 0 1 17.5 17h-11z"/>
-    </svg>
-    Content Delivery
-  </a>
-  <a class="back" href="/">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
-    Back to site
-  </a>
-</nav>
+<main id="main" class="w-full pt-16">
+<div class="relative overflow-hidden">
+<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[300px] bg-primary/10 blur-[130px] pointer-events-none rounded-full"></div>
 
-<main id="main">
+<div class="max-w-[900px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop pt-space-2xl pb-space-3xl relative">
 
-<header class="hero rise">
-  <h1>API documentation</h1>
-  <p>
-    An authenticated REST API over your Cloudflare R2 bucket. Files support
-    streaming upload and download, per-file expiration, search, sorting,
-    and bulk deletion.
+  <div class="flex items-center gap-2 mb-space-sm">
+    <span class="h-[1px] w-5 bg-primary"></span>
+    <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Reference</span>
+  </div>
+
+  <h1 class="font-display-hero text-headline-lg lg:text-display-hero text-text-primary font-bold tracking-tight mb-space-sm">
+    API documentation
+  </h1>
+
+  <p class="font-body-lg text-body-lg text-text-secondary max-w-2xl leading-relaxed mb-space-lg">
+    An authenticated REST API over your Cloudflare R2 bucket, plus one open endpoint for
+    public sharing. Files support streaming upload and download, per-file expiration,
+    search, sorting, and bulk deletion.
   </p>
-</header>
 
-<div class="notice rise rise-1">
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-    <rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>
-  </svg>
-  <div>
-    Every request needs <code>Authorization: Bearer YOUR_API_KEY</code>.
-    The Worker reads the key from its <code>API_KEY</code> environment variable,
-    and all responses are JSON unless the endpoint streams a file.
-  </div>
-</div>
-
-<h2 class="group">Status</h2>
-
-<div class="card">
-  <div class="head"><span class="method">GET</span><span class="path">/api/health</span></div>
-  <div class="body">
-    <pre><code>curl "https://cdn.pushkarsingh4343.workers.dev/api/health" \
-  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
-    <pre><code>{
-  "object": "health",
-  "status": "ok",
-  "service": "Content Delivery",
-  "version": "${VERSION}",
-  "bucket": "${BUCKET_NAME}",
-  "timestamp": "2026-08-15T09:41:22.810Z"
-}</code></pre>
-  </div>
-</div>
-
-<div class="card">
-  <div class="head"><span class="method">GET</span><span class="path">/api/stats</span></div>
-  <div class="body">
-    <pre><code>curl "https://cdn.pushkarsingh4343.workers.dev/api/stats" \
-  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
-    <pre><code>{
-  "object": "stats",
-  "files": 12,
-  "bytes": 48192031,
-  "formatted_bytes": "45.96 MB",
-  "expired": 0,
-  "bucket": "${BUCKET_NAME}",
-  "version": "${VERSION}"
-}</code></pre>
-  </div>
-</div>
-
-<h2 class="group">Uploads</h2>
-
-<div class="card">
-  <div class="head"><span class="method">PUT</span><span class="path">/api/upload</span></div>
-  <div class="body">
-    <p class="note">Standard streaming upload. The body pipes directly into R2 with no size cap.</p>
-    <pre><code>curl -X PUT \
-  "https://cdn.pushkarsingh4343.workers.dev/api/upload?filename=video.mp4&expires=7d" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: video/mp4" \
-  --data-binary "@video.mp4"</code></pre>
-    <pre><code>{
-  "object": "file",
-  "status": "complete",
-  "id": "abc123…",
-  "key": "files/abc123…",
-  "name": "video.mp4",
-  "size": 10485760,
-  "content_type": "video/mp4",
-  "uploaded_at": "…",
-  "expires_at": "…",
-  "download_url": "https://cdn.pushkarsingh4343.workers.dev/api/files/abc123…"
-}</code></pre>
-  </div>
-</div>
-
-<div class="card">
-  <div class="head"><span class="method post">POST</span><span class="path">/api/upload</span></div>
-  <div class="body">
-    <p class="note">Multipart form upload, for browser forms and <code>curl -F</code>.</p>
-    <pre><code>curl -X POST \
-  "https://cdn.pushkarsingh4343.workers.dev/api/upload?expires=30d" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -F "file=@document.pdf"</code></pre>
-  </div>
-</div>
-
-<h2 class="group">Files</h2>
-
-<div class="card">
-  <div class="head"><span class="method">GET</span><span class="path">/api/files</span></div>
-  <div class="body">
-    <p class="note">
-      Query parameters: <code>limit</code>, <code>cursor</code>, <code>search</code>,
-      <code>type</code>, <code>sort</code> (uploaded | name | size), <code>order</code> (asc | desc).
+  <div class="flex gap-space-sm items-start rounded-xl border border-primary/30 bg-primary/5 p-space-md mb-space-2xl">
+    <span class="material-symbols-outlined text-primary text-[20px] shrink-0">key</span>
+    <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
+      Everything under ${code("/api/")} needs ${code("Authorization: Bearer YOUR_API_KEY")}.
+      The Worker reads the key from its ${code("API_KEY")} environment variable.
+      ${code("/public/upload")} and ${code("/f/:id")} are the only open routes.
     </p>
-    <pre><code>curl \
-  "https://cdn.pushkarsingh4343.workers.dev/api/files?search=photo&sort=size&order=desc" \
-  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
-    <pre><code>{
-  "object": "list",
-  "data": [
+  </div>
+
+  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mb-space-md">Public</h2>
+
+  ${endpointCard({
+    method: "PUT",
+    path: "/public/upload",
+    tag: "no auth",
+    note: `Fixed 7-day expiry and a 100 MB cap. ${code(
+      "Content-Length"
+    )} is required. HTML and SVG uploads are stored as ${code(
+      "application/octet-stream"
+    )} and served as downloads rather than rendered. Send ${code(
+      "POST"
+    )} with ${code("multipart/form-data")} and a ${code(
+      "file"
+    )} field if you prefer form uploads.`,
+    blocks: [
+      {
+        label: "Request",
+        code: `<span class="text-primary">curl</span> -X PUT \\
+  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/public/upload?filename=notes.txt"</span> \\
+  -H <span class="text-tertiary">"Content-Type: text/plain"</span> \\
+  --data-binary <span class="text-text-secondary">"@notes.txt"</span>`,
+      },
+      {
+        label: "Response",
+        code: `{
+  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>,
+  <span class="text-tertiary">"id"</span>: <span class="text-primary-fixed-dim">"abc123…"</span>,
+  <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"notes.txt"</span>,
+  <span class="text-tertiary">"size"</span>: <span class="text-primary-fixed-dim">4821</span>,
+  <span class="text-tertiary">"expires_at"</span>: <span class="text-primary-fixed-dim">"…"</span>,
+  <span class="text-tertiary">"url"</span>: <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/f/abc123…"</span>
+}`,
+      },
+    ],
+  })}
+
+  ${endpointCard({
+    method: "GET",
+    path: "/f/:id",
+    tag: "no auth",
+    note: `Serves publicly uploaded files only — private objects return ${code(
+      "404"
+    )} here. A browser gets a viewer page with the file rendered inline and a download
+      button; anything that doesn't ask for ${code(
+        "text/html"
+      )}, such as curl, gets the bytes. Add ${code(
+      "?raw=1"
+    )} for the bytes from a browser, or ${code(
+      "?download=1"
+    )} to force an attachment. ${code("Range")} requests return ${code(
+      "206"
+    )} and expired links return ${code("410")}. Set the ${code(
+      "PUBLIC_UPLOADS"
+    )} variable to ${code("false")} to disable new public uploads.`,
+  })}
+
+  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Status</h2>
+
+  ${endpointCard({
+    method: "GET",
+    path: "/api/health",
+    blocks: [
+      {
+        label: "Response",
+        code: `{
+  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"health"</span>,
+  <span class="text-tertiary">"status"</span>: <span class="text-primary-fixed-dim">"ok"</span>,
+  <span class="text-tertiary">"version"</span>: <span class="text-primary-fixed-dim">"${VERSION}"</span>,
+  <span class="text-tertiary">"bucket"</span>: <span class="text-primary-fixed-dim">"${BUCKET_NAME}"</span>
+}`,
+      },
+    ],
+  })}
+
+  ${endpointCard({
+    method: "GET",
+    path: "/api/stats",
+    blocks: [
+      {
+        label: "Response",
+        code: `{
+  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"stats"</span>,
+  <span class="text-tertiary">"files"</span>: <span class="text-primary-fixed-dim">12</span>,
+  <span class="text-tertiary">"public_files"</span>: <span class="text-primary-fixed-dim">3</span>,
+  <span class="text-tertiary">"bytes"</span>: <span class="text-primary-fixed-dim">48192031</span>,
+  <span class="text-tertiary">"formatted_bytes"</span>: <span class="text-primary-fixed-dim">"45.96 MB"</span>,
+  <span class="text-tertiary">"expired"</span>: <span class="text-primary-fixed-dim">0</span>
+}`,
+      },
+    ],
+  })}
+
+  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Uploads</h2>
+
+  ${endpointCard({
+    method: "PUT",
+    path: "/api/upload",
+    note: "Streaming upload. The body pipes directly into R2 with no size cap.",
+    blocks: [
+      {
+        label: "Request",
+        code: `<span class="text-primary">curl</span> -X PUT \\
+  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/upload?filename=video.mp4&amp;expires=7d"</span> \\
+  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
+  -H <span class="text-tertiary">"Content-Type: video/mp4"</span> \\
+  --data-binary <span class="text-text-secondary">"@video.mp4"</span>`,
+      },
+    ],
+  })}
+
+  ${endpointCard({
+    method: "POST",
+    path: "/api/upload",
+    note: `Multipart form upload, for browser forms and ${code("curl -F")}.`,
+    blocks: [
+      {
+        label: "Request",
+        code: `<span class="text-primary">curl</span> -X POST \\
+  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/upload?expires=30d"</span> \\
+  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
+  -F <span class="text-text-secondary">"file=@document.pdf"</span>`,
+      },
+    ],
+  })}
+
+  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Files</h2>
+
+  ${endpointCard({
+    method: "GET",
+    path: "/api/files",
+    note: `Query parameters: ${code("limit")}, ${code("cursor")}, ${code(
+      "search"
+    )}, ${code("type")}, ${code("sort")} (uploaded | name | size), ${code(
+      "order"
+    )} (asc | desc).`,
+    blocks: [
+      {
+        label: "Response",
+        code: `{
+  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"list"</span>,
+  <span class="text-tertiary">"data"</span>: [
     {
-      "id": "abc123…",
-      "name": "photo.jpg",
-      "size": 245821,
-      "content_type": "image/jpeg",
-      "uploaded_at": "…",
-      "expires_at": "…",
-      "etag": "…",
-      "download_url": "/api/files/abc123…"
+      <span class="text-tertiary">"id"</span>: <span class="text-primary-fixed-dim">"abc123…"</span>,
+      <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"photo.jpg"</span>,
+      <span class="text-tertiary">"size"</span>: <span class="text-primary-fixed-dim">245821</span>,
+      <span class="text-tertiary">"visibility"</span>: <span class="text-primary-fixed-dim">"private"</span>,
+      <span class="text-tertiary">"public_url"</span>: <span class="text-primary-fixed-dim">null</span>
     }
   ],
-  "pagination": { "cursor": null, "has_more": false },
-  "count": 1
-}</code></pre>
-  </div>
-</div>
+  <span class="text-tertiary">"count"</span>: <span class="text-primary-fixed-dim">1</span>
+}`,
+      },
+    ],
+  })}
 
-<div class="card">
-  <div class="head"><span class="method">GET</span><span class="path">/api/files/:id</span></div>
-  <div class="body">
-    <pre><code>curl \
-  "https://cdn.pushkarsingh4343.workers.dev/api/files/abc123…" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -o file</code></pre>
-    <p class="note" style="padding-bottom:16px">
-      Streams inline by default. Add <code>?download=1</code> to force an attachment.
-      <code>Range</code> requests return <code>206</code> with a <code>Content-Range</code> header.
-    </p>
-  </div>
-</div>
+  ${endpointCard({
+    method: "GET",
+    path: "/api/files/:id",
+    note: `Streams inline by default. Add ${code(
+      "?download=1"
+    )} to force an attachment. ${code("Range")} requests return ${code(
+      "206"
+    )} with a ${code("Content-Range")} header.`,
+  })}
 
-<div class="card">
-  <div class="head"><span class="method delete">DELETE</span><span class="path">/api/files/:id</span></div>
-  <div class="body">
-    <pre><code>curl -X DELETE \
-  "https://cdn.pushkarsingh4343.workers.dev/api/files/abc123…" \
-  -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
-    <pre><code>{ "object": "file", "deleted": true, "id": "abc123…" }</code></pre>
-  </div>
-</div>
+  ${endpointCard({
+    method: "DELETE",
+    path: "/api/files/:id",
+    blocks: [
+      {
+        label: "Response",
+        code: `{ <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>, <span class="text-tertiary">"deleted"</span>: <span class="text-primary-fixed-dim">true</span> }`,
+      },
+    ],
+  })}
 
-<div class="card">
-  <div class="head"><span class="method delete">DELETE</span><span class="path">/api/files</span></div>
-  <div class="body">
-    <p class="note">Bulk delete, up to 1000 IDs per call.</p>
-    <pre><code>curl -X DELETE \
-  "https://cdn.pushkarsingh4343.workers.dev/api/files" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"ids":["abc123","def456"]}'</code></pre>
-  </div>
-</div>
+  ${endpointCard({
+    method: "DELETE",
+    path: "/api/files",
+    note: "Bulk delete, up to 1000 IDs per call.",
+    blocks: [
+      {
+        label: "Request",
+        code: `<span class="text-primary">curl</span> -X DELETE \\
+  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/files"</span> \\
+  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
+  -H <span class="text-tertiary">"Content-Type: application/json"</span> \\
+  -d <span class="text-text-secondary">'{"ids":["abc123","def456"]}'</span>`,
+      },
+    ],
+  })}
 
-<h2 class="group">Expiration values</h2>
+  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Expiration values</h2>
 
-<div class="card">
-  <div class="body">
-    <table>
-      <tr><th>Value</th><th>Lifetime</th></tr>
-      <tr><td><code>1h</code></td><td>1 hour</td></tr>
-      <tr><td><code>6h</code></td><td>6 hours</td></tr>
-      <tr><td><code>12h</code></td><td>12 hours</td></tr>
-      <tr><td><code>1d</code></td><td>1 day</td></tr>
-      <tr><td><code>3d</code></td><td>3 days</td></tr>
-      <tr><td><code>7d</code></td><td>7 days (default)</td></tr>
-      <tr><td><code>30d</code></td><td>30 days</td></tr>
-      <tr><td><code>90d</code></td><td>90 days</td></tr>
-      <tr><td><code>never</code></td><td>No expiration</td></tr>
+  <div class="rounded-xl bg-surface-card border border-border-subtle overflow-hidden">
+    <table class="w-full">
+      <thead>
+        <tr class="border-b border-border-subtle bg-surface-base">
+          <th class="text-left px-space-lg py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Value</th>
+          <th class="text-left px-space-lg py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Lifetime</th>
+        </tr>
+      </thead>
+      <tbody class="font-body-md text-body-md text-text-secondary">
+        ${[
+          ["1h", "1 hour"],
+          ["6h", "6 hours"],
+          ["12h", "12 hours"],
+          ["1d", "1 day"],
+          ["3d", "3 days"],
+          ["7d", "7 days — the default, and fixed for public uploads"],
+          ["30d", "30 days"],
+          ["90d", "90 days"],
+          ["never", "No expiration"],
+        ]
+          .map(
+            ([value, meaning]) => `<tr class="border-b border-border-subtle/60 last:border-0">
+          <td class="px-space-lg py-space-sm font-label-code-md text-body-sm text-primary">${value}</td>
+          <td class="px-space-lg py-space-sm">${meaning}</td>
+        </tr>`
+          )
+          .join("\n        ")}
+      </tbody>
     </table>
   </div>
-</div>
 
+</div>
+</div>
 </main>
 
-<footer class="footer">
-  <span>Content Delivery — Cloudflare Workers + R2</span>
-  <a href="/dashboard">Dashboard →</a>
-</footer>
+${SITE_FOOTER}
+
+</body>
+</html>`
+  );
+}
+
+/* ============================================================
+   PREVIEW PAGE
+   ============================================================ */
+
+function previewGlyph(type) {
+  type = String(type || "").toLowerCase();
+  if (type.startsWith("image/")) return "image";
+  if (type.startsWith("video/")) return "movie";
+  if (type.startsWith("audio/")) return "graphic_eq";
+  if (type.includes("pdf")) return "picture_as_pdf";
+  if (type.includes("zip") || type.includes("compressed")) return "folder_zip";
+  if (type.includes("json") || type.startsWith("text/")) return "terminal";
+  return "draft";
+}
+
+function previewPage(file) {
+  const raw = `${PUBLIC_PREFIX}${encodeURIComponent(file.id)}?raw=1`;
+  const download = `${PUBLIC_PREFIX}${encodeURIComponent(file.id)}?download=1`;
+  const type = String(file.type || "").toLowerCase();
+  const name = htmlEscape(file.name);
+
+  let media;
+
+  if (type.startsWith("image/")) {
+    media = `<img class="max-w-full max-h-[72vh] rounded-lg block" src="${raw}" alt="${name}">`;
+  } else if (type.startsWith("video/")) {
+    media = `<video class="max-w-full max-h-[72vh] rounded-lg block" src="${raw}" controls playsinline preload="metadata"></video>`;
+  } else if (type.startsWith("audio/")) {
+    media = `<audio class="w-full max-w-lg" src="${raw}" controls preload="metadata"></audio>`;
+  } else if (type.includes("pdf")) {
+    media = `<iframe class="w-full h-[74vh] rounded-lg bg-surface-card border-0" src="${raw}" title="${name}"></iframe>`;
+  } else if (
+    type.startsWith("text/") ||
+    type.includes("json") ||
+    type.includes("csv") ||
+    type.includes("xml")
+  ) {
+    media = `<pre id="text" class="w-full max-h-[70vh] overflow-auto m-0 font-label-code-lg text-body-sm text-text-secondary leading-relaxed whitespace-pre-wrap break-words">Loading…</pre>`;
+  } else {
+    media = `<div class="flex flex-col items-center gap-space-sm py-space-2xl text-center">
+      <div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center text-text-muted">
+        <span class="material-symbols-outlined text-[24px]">visibility_off</span>
+      </div>
+      <p class="font-body-md text-body-md text-text-secondary">No preview for this file type. Download it to open.</p>
+    </div>`;
+  }
+
+  return htmlPage(
+`<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${name} — Content Delivery</title>
+${HEAD_ASSETS}
+</head>
+<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
+
+${SITE_HEADER}
+
+<main class="w-full pt-16">
+<div class="relative overflow-hidden">
+<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[300px] bg-primary/10 blur-[130px] pointer-events-none rounded-full"></div>
+
+<div class="max-w-[960px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-2xl relative">
+
+  <div class="rounded-2xl bg-surface-card border border-border-subtle overflow-hidden shadow-2xl">
+    <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent"></div>
+
+    <div class="flex flex-wrap items-center gap-space-md px-space-lg py-space-md border-b border-border-subtle bg-surface-base">
+      <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary shrink-0">
+        <span class="material-symbols-outlined text-[20px]">${previewGlyph(
+          file.type
+        )}</span>
+      </div>
+
+      <div class="min-w-0 flex-1">
+        <p class="font-headline-sm text-headline-sm text-text-primary truncate" title="${name}">${name}</p>
+        <div class="flex flex-wrap items-center gap-space-xs font-label-code-md text-caption text-text-muted mt-0.5">
+          <span>${formatBytes(file.size)}</span><span>&bull;</span>
+          <span>${htmlEscape(file.type)}</span><span>&bull;</span>
+          <span class="text-primary">${relativeTime(file.expiresAt)}</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-space-xs w-full sm:w-auto">
+        <a href="${download}" download
+          class="flex-1 sm:flex-none justify-center px-space-lg py-space-xs rounded-lg bg-primary text-white font-headline-sm text-body-sm hover:bg-primary-container transition-all inline-flex items-center gap-space-xs shadow-lg shadow-primary/20">
+          <span class="material-symbols-outlined text-[18px]">download</span>
+          Download
+        </a>
+        <a href="${raw}" target="_blank" rel="noopener"
+          class="flex-1 sm:flex-none justify-center px-space-md py-space-xs rounded-lg bg-surface-raised border border-border-subtle text-text-primary font-headline-sm text-body-sm hover:border-border-highlight transition-all inline-flex items-center gap-space-xs">
+          <span class="material-symbols-outlined text-[18px]">open_in_new</span>
+          Raw
+        </a>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-center p-space-lg bg-surface-deep min-h-[240px]">${media}</div>
+
+    <div class="flex items-center gap-space-xs px-space-lg py-space-md border-t border-border-subtle bg-surface-base">
+      <input id="link" type="text" readonly aria-label="Link to this file"
+        class="flex-1 min-w-0 h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-secondary font-label-code-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+      <button id="copy" type="button"
+        class="h-10 px-space-md rounded-lg bg-surface-raised border border-border-subtle text-text-primary font-headline-sm text-body-sm hover:border-primary hover:text-primary transition-all inline-flex items-center gap-space-xs shrink-0">
+        <span class="material-symbols-outlined text-[18px]">content_copy</span>
+        <span id="copy-label">Copy link</span>
+      </button>
+    </div>
+  </div>
+
+  <p class="mt-space-lg text-center font-body-sm text-body-sm text-text-muted">
+    This link expires on its own.
+    <a class="text-text-secondary hover:text-primary transition-colors" href="/#share">Share a file of your own</a>
+  </p>
 
 </div>
+</div>
+</main>
+
+${SITE_FOOTER}
+
+<script>
+(function () {
+  var field = document.getElementById("link");
+  var copy = document.getElementById("copy");
+  var label = document.getElementById("copy-label");
+
+  field.value = location.origin + location.pathname;
+  field.addEventListener("focus", function () { field.select(); });
+
+  copy.addEventListener("click", function () {
+    var mark = function () {
+      label.textContent = "Copied";
+      setTimeout(function () { label.textContent = "Copy link"; }, 1600);
+    };
+
+    var manual = function () {
+      field.select();
+      document.execCommand("copy");
+      mark();
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(field.value).then(mark, manual);
+    } else {
+      manual();
+    }
+  });
+
+  var pre = document.getElementById("text");
+
+  if (pre) {
+    fetch(location.pathname + "?raw=1")
+      .then(function (response) { return response.text(); })
+      .then(function (body) { pre.textContent = body.slice(0, 300000); })
+      .catch(function () { pre.textContent = "Could not load this file."; });
+  }
+})();
+</script>
+
+</body>
+</html>`
+  );
+}
+
+/* ============================================================
+   STATUS PAGES
+   ============================================================ */
+
+function statusPage({ status, code, title, message, tone = "primary" }) {
+  return htmlPage(
+`<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${title} — Content Delivery</title>
+${HEAD_ASSETS}
+</head>
+<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
+
+${SITE_HEADER}
+
+<main class="w-full pt-16">
+<div class="relative overflow-hidden min-h-[70vh] flex items-center justify-center px-gutter-mobile">
+<div class="absolute -top-20 left-1/2 -translate-x-1/2 w-[620px] h-[300px] bg-${tone}/10 blur-[130px] pointer-events-none rounded-full"></div>
+
+<div class="relative text-center max-w-md py-space-3xl">
+  <div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center text-${tone} mx-auto mb-space-md">
+    <span class="material-symbols-outlined text-[24px]">${
+      status === 410 ? "hourglass_disabled" : "search_off"
+    }</span>
+  </div>
+
+  <div class="font-eyebrow text-eyebrow uppercase tracking-widest text-${tone} mb-space-xs">${code}</div>
+
+  <h1 class="font-headline-lg text-headline-lg text-text-primary font-semibold tracking-tight mb-space-sm">${title}</h1>
+
+  <p class="font-body-md text-body-md text-text-secondary leading-relaxed mb-space-lg">${message}</p>
+
+  <a class="px-space-lg py-space-sm rounded-lg bg-primary text-white font-headline-sm text-body-md hover:bg-primary-container transition-all inline-flex items-center gap-space-xs shadow-lg shadow-primary/20" href="/">
+    <span class="material-symbols-outlined text-[18px]">arrow_back</span>
+    Back to Content Delivery
+  </a>
+</div>
+</div>
+</main>
+
+${SITE_FOOTER}
+
 </body>
 </html>`,
-    {
-      headers: {
-        ...SECURITY_HEADERS,
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
-    }
+    status
   );
+}
+
+function notFoundPage() {
+  return statusPage({
+    status: 404,
+    code: "404",
+    title: "That page doesn't exist",
+    message:
+      "The link may be wrong, or the file may have been deleted. Head back to the homepage to keep going.",
+  });
+}
+
+function expiredPage() {
+  return statusPage({
+    status: 410,
+    code: "410",
+    title: "This link has expired",
+    message:
+      "Public files are kept for seven days and then deleted. Ask whoever sent it to upload the file again.",
+    tone: "method-post",
+  });
 }
 
 /* ============================================================
@@ -2093,1024 +2784,214 @@ td code {
    ============================================================ */
 
 function dashboardPage() {
-  return new Response(
+  return htmlPage(
 `<!DOCTYPE html>
-<html lang="en">
+<html class="dark" lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Dashboard — Content Delivery</title>
 <meta name="description" content="Manage files in your Content Delivery bucket.">
-${FAVICON}
-${FONT_LINKS}
-<style>
-${BASE_CSS}
-
-.container {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 20px 20px 70px;
-}
-
-.topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 26px;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-
-.brand svg { display: block; }
-
-.title { font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
-
-.subtitle {
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11px;
-  margin-top: 1px;
-}
-
-.actions { display: flex; gap: 8px; flex-wrap: wrap; }
-
-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform .14s, background .14s, border-color .14s;
-}
-
-button:hover { border-color: var(--faint); transform: translateY(-1px); }
-button:active { transform: translateY(1px) scale(.99); }
-
-button.primary {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--accent-ink);
-}
-
-button.primary:hover { background: #8fe6b4; }
-
-button.danger {
-  color: #f0a6ae;
-  background: var(--danger-dim);
-  border-color: rgba(229,106,119,.3);
-}
-
-button.danger:hover { border-color: rgba(229,106,119,.55); }
-
-button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.stat {
-  position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 16px 18px;
-  background: var(--surface);
-  overflow: hidden;
-}
-
-.stat::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 18px;
-  right: 18px;
-  height: 1px;
-  background: linear-gradient(90deg, var(--accent), transparent);
-  opacity: .5;
-}
-
-.statLabel {
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-
-.statValue {
-  margin-top: 6px;
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 23px;
-  font-weight: 600;
-  letter-spacing: -.02em;
-}
-
-.upload {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  background: var(--surface);
-  margin-bottom: 14px;
-}
-
-.drop {
-  padding: 34px 20px;
-  border: 1.5px dashed var(--border-strong);
-  border-radius: var(--radius-md);
-  text-align: center;
-  transition: border-color .18s, background .18s;
-}
-
-.drop.drag {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-}
-
-.uploadIcon {
-  width: 46px;
-  height: 46px;
-  display: grid;
-  place-items: center;
-  margin: 0 auto 12px;
-  border-radius: var(--radius-md);
-  background: var(--accent-dim);
-  color: var(--accent);
-}
-
-.uploadTitle { font-weight: 700; font-size: 15.5px; letter-spacing: -.01em; }
-
-.muted { color: var(--muted); }
-.small { font-size: 12px; }
-
-.fileInput {
-  width: 100%;
-  margin-top: 16px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: #0b0e12;
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.fileInput::file-selector-button {
-  margin-right: 12px;
-  padding: 6px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.uploadControls {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  max-width: 560px;
-  margin: 14px auto 0;
-}
-
-select, .search {
-  width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: #0b0e12;
-  color: var(--text);
-  outline: none;
-  font: inherit;
-  font-size: 13px;
-  transition: border-color .16s, box-shadow .16s;
-}
-
-select:focus, .search:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
-
-.progress {
-  margin-top: 10px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  text-align: center;
-  min-height: 16px;
-}
-
-.files {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background: var(--surface);
-}
-
-.fileTop {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 15px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.fileTop strong { font-size: 14.5px; letter-spacing: -.01em; }
-
-.fileSearch {
-  display: grid;
-  grid-template-columns: 1fr 170px 140px;
-  gap: 8px;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.bulk {
-  display: none;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 18px;
-  border-bottom: 1px solid rgba(125,219,163,.25);
-  background: var(--accent-dim);
-}
-
-.tableWrap { overflow-x: auto; }
-
-table {
-  width: 100%;
-  min-width: 920px;
-  border-collapse: collapse;
-}
-
-th {
-  text-align: left;
-  padding: 10px 12px;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-  border-bottom: 1px solid var(--border);
-}
-
-td {
-  padding: 11px 12px;
-  border-bottom: 1px solid #141a21;
-  font-size: 12.5px;
-}
-
-tbody tr { transition: background .12s; }
-tbody tr:hover td { background: rgba(255,255,255,.015); }
-
-td.num {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
-.fileCell {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 260px;
-}
-
-.fileIcon {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-  display: grid;
-  place-items: center;
-  background: var(--surface-2);
-  color: var(--accent);
-  flex: none;
-}
-
-.fileName {
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.fileType {
-  margin-top: 2px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--faint);
-}
-
-.pill {
-  display: inline-flex;
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 500;
-}
-
-.pill.green { color: var(--accent); background: var(--accent-dim); }
-.pill.yellow { color: var(--warn); background: var(--warn-dim); }
-
-.rowButtons { display: flex; gap: 5px; }
-
-.rowButtons button {
-  padding: 5px 9px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.skel {
-  height: 14px;
-  border-radius: 5px;
-  background: linear-gradient(90deg, var(--surface-2) 25%, #1c232c 50%, var(--surface-2) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.3s infinite;
-}
-
-@keyframes shimmer {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
-}
-
-.empty {
-  padding: 60px 20px;
-  text-align: center;
-}
-
-.emptyIcon {
-  width: 52px;
-  height: 52px;
-  margin: 0 auto 14px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-  color: var(--faint);
-}
-
-.emptyTitle { font-weight: 700; font-size: 15px; }
-.emptyText { color: var(--muted); font-size: 13px; margin-top: 4px; }
-
-.modal {
-  display: none;
-  position: fixed;
-  inset: 0;
-  z-index: 900;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  background: rgba(4,6,8,.7);
-  backdrop-filter: blur(4px);
-}
-
-.modalCard {
-  width: min(680px, 100%);
-  max-height: 88vh;
-  overflow: auto;
-  padding: 20px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: 0 40px 90px -20px rgba(0,0,0,.7);
-  animation: rise .3s cubic-bezier(.22,.8,.3,1) both;
-}
-
-.modalTop {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 14px;
-}
-
-.metaGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.meta {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: #0b0e12;
-}
-
-.metaLabel {
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-}
-
-.metaValue {
-  margin-top: 5px;
-  font-size: 12.5px;
-  word-break: break-all;
-}
-
-.metaValue.mono { font-size: 11.5px; }
-
-#toast {
-  display: none;
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 1200;
-  max-width: 360px;
-  padding: 12px 16px;
-  border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  box-shadow: 0 20px 50px rgba(0,0,0,.5);
-  font-size: 13px;
-  animation: rise .25s cubic-bezier(.22,.8,.3,1) both;
-}
-
-#toast.err { border-left-color: var(--danger); }
-
-@media (max-width: 900px) {
-  .stats { grid-template-columns: repeat(2, 1fr); }
-  .fileSearch { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 600px) {
-  .uploadControls { grid-template-columns: 1fr; }
-  .subtitle { display: none; }
-  .metaGrid { grid-template-columns: 1fr; }
-}
-</style>
+${HEAD_ASSETS}
 </head>
-<body>
+<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
 
 <a class="skip" href="#main">Skip to content</a>
 
-<div class="container">
+<header class="fixed top-0 left-0 right-0 z-50 bg-surface-deep/85 backdrop-blur-xl border-b border-border-subtle">
+  <div class="h-16 max-w-[1240px] mx-auto px-gutter-mobile lg:px-gutter-desktop flex items-center justify-between gap-space-md">
+    <a class="flex items-center gap-space-xs min-w-0" href="/">
+      <div class="w-8 h-8 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center shrink-0">
+        <span class="material-symbols-outlined text-primary text-[18px]">cloud_sync</span>
+      </div>
+      <div class="min-w-0">
+        <div class="font-headline-sm text-headline-sm text-text-primary tracking-tight truncate">Content Delivery</div>
+        <div class="hidden sm:block font-label-code-md text-caption text-text-muted truncate">bucket: ${BUCKET_NAME} · v${VERSION}</div>
+      </div>
+    </a>
 
-<header class="topbar">
-  <div class="brand">
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7ddba3" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
-      <path d="M6.5 17a4.5 4.5 0 0 1 .8-8.9A5.5 5.5 0 0 1 18 9.6 3.8 3.8 0 0 1 17.5 17h-11z"/>
-    </svg>
-    <div>
-      <div class="title">Content Delivery</div>
-      <div class="subtitle">bucket: ${BUCKET_NAME}</div>
+    <div class="flex items-center gap-space-xs">
+      <a href="/docs" class="hidden sm:inline-flex px-space-md py-space-xs rounded-lg bg-surface-card border border-border-subtle text-text-secondary font-body-md text-body-sm hover:text-text-primary hover:border-border-highlight transition-all items-center gap-1.5">
+        <span class="material-symbols-outlined text-[16px]">description</span>
+        API docs
+      </a>
+      <button id="refresh" type="button" class="px-space-md py-space-xs rounded-lg bg-surface-card border border-border-subtle text-text-secondary font-body-md text-body-sm hover:text-text-primary hover:border-border-highlight transition-all inline-flex items-center gap-1.5">
+        <span class="material-symbols-outlined text-[16px]">refresh</span>
+        Refresh
+      </button>
+      <button id="logout" type="button" class="px-space-md py-space-xs rounded-lg bg-method-delete/10 border border-method-delete/30 text-method-delete font-body-md text-body-sm hover:border-method-delete/60 transition-all inline-flex items-center gap-1.5">
+        <span class="material-symbols-outlined text-[16px]">logout</span>
+        <span class="hidden sm:inline">Log out</span>
+      </button>
     </div>
-  </div>
-
-  <div class="actions">
-    <button onclick="location.href='/docs'">API docs</button>
-    <button onclick="refreshAll()">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
-      Refresh
-    </button>
-    <button class="danger" onclick="logout()">Log out</button>
   </div>
 </header>
 
-<main id="main">
+<main id="main" class="w-full pt-16">
+<div class="relative overflow-hidden">
+<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[300px] bg-primary/10 blur-[130px] pointer-events-none rounded-full"></div>
 
-<section class="stats" aria-label="Storage statistics">
-  <div class="stat">
-    <div class="statLabel">Files</div>
-    <div id="statFiles" class="statValue">—</div>
-  </div>
-  <div class="stat">
-    <div class="statLabel">Storage used</div>
-    <div id="statStorage" class="statValue">—</div>
-  </div>
-  <div class="stat">
-    <div class="statLabel">Expired</div>
-    <div id="statExpired" class="statValue">—</div>
-  </div>
-  <div class="stat">
-    <div class="statLabel">Version</div>
-    <div class="statValue" style="font-size:16px">v${VERSION}</div>
-  </div>
-</section>
+<div class="max-w-[1240px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-xl relative space-y-space-md">
 
-<section class="upload" aria-label="Upload">
-  <div id="drop" class="drop">
-    <div class="uploadIcon">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>
+  <!-- stats -->
+  <section class="grid grid-cols-2 lg:grid-cols-4 gap-space-md" aria-label="Storage statistics">
+    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
+      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-primary/60 to-transparent"></div>
+      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Files</div>
+      <div id="stat-files" class="mt-space-xs font-label-code-lg text-headline-md text-text-primary font-bold">—</div>
+    </div>
+    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
+      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-primary/60 to-transparent"></div>
+      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Storage used</div>
+      <div id="stat-storage" class="mt-space-xs font-label-code-lg text-headline-md text-text-primary font-bold">—</div>
+    </div>
+    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
+      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-tertiary/60 to-transparent"></div>
+      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Public</div>
+      <div id="stat-public" class="mt-space-xs font-label-code-lg text-headline-md text-tertiary font-bold">—</div>
+    </div>
+    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
+      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-method-post/60 to-transparent"></div>
+      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Expired</div>
+      <div id="stat-expired" class="mt-space-xs font-label-code-lg text-headline-md text-text-primary font-bold">—</div>
+    </div>
+  </section>
+
+  <!-- upload -->
+  <section class="relative rounded-2xl bg-surface-card border border-border-subtle p-space-sm sm:p-space-lg shadow-2xl group" aria-label="Upload">
+    <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent"></div>
+
+    <div id="drop-target" class="relative flex flex-col items-center justify-center p-space-xl rounded-xl border-2 border-dashed border-border-subtle bg-surface-deep/90 hover:border-primary/60 transition-all duration-200 text-center">
+      <div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center mb-space-sm text-primary">
+        <span class="material-symbols-outlined text-[24px]">upload_file</span>
+      </div>
+
+      <p class="font-headline-sm text-headline-sm text-text-primary">Drop a file, or browse</p>
+      <p class="font-body-md text-body-md text-text-secondary mt-1">Streamed straight to R2 — no size cap on this side.</p>
+
+      <input id="file-input" type="file" aria-label="Choose a file"
+        class="w-full max-w-xl mt-space-md px-space-md py-space-xs rounded-lg bg-surface-deep border border-border-subtle text-text-secondary font-body-md text-body-sm file:mr-3 file:px-space-md file:py-1 file:rounded file:border-0 file:bg-surface-raised file:text-text-primary file:font-body-md file:text-body-sm file:cursor-pointer">
+
+      <div class="w-full max-w-xl mt-space-sm grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-space-xs">
+        <select id="expiry" aria-label="Expiration"
+          class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+          <option value="1h">Expires in 1 hour</option>
+          <option value="6h">Expires in 6 hours</option>
+          <option value="12h">Expires in 12 hours</option>
+          <option value="1d">Expires in 1 day</option>
+          <option value="3d">Expires in 3 days</option>
+          <option value="7d" selected>Expires in 7 days</option>
+          <option value="30d">Expires in 30 days</option>
+          <option value="90d">Expires in 90 days</option>
+          <option value="never">Never expires</option>
+        </select>
+
+        <button id="upload-button" type="button"
+          class="h-10 px-space-lg rounded-lg bg-primary text-white font-headline-sm text-body-md hover:bg-primary-container transition-all inline-flex items-center justify-center gap-space-xs shadow-lg shadow-primary/20 disabled:opacity-60">
+          <span class="material-symbols-outlined text-[18px]">arrow_upward</span>
+          Upload
+        </button>
+      </div>
+
+      <div id="progress" class="mt-space-sm min-h-[18px] font-label-code-md text-caption text-text-muted" role="status"></div>
+    </div>
+  </section>
+
+  <!-- files -->
+  <section class="rounded-2xl bg-surface-card border border-border-subtle overflow-hidden" aria-label="Files">
+    <div class="flex items-center justify-between gap-space-md px-space-lg py-space-md border-b border-border-subtle bg-surface-base">
+      <div class="flex items-center gap-space-sm">
+        <span class="font-headline-sm text-headline-sm text-text-primary">Files</span>
+        <span id="result-count" class="font-label-code-md text-caption text-text-muted">—</span>
+      </div>
     </div>
 
-    <div class="uploadTitle">Drop a file, or browse</div>
-    <div class="muted small" style="margin-top:3px">
-      Images, video, archives, documents — streamed straight to R2.
+    <div id="bulk" class="hidden items-center justify-between gap-space-md px-space-lg py-space-xs border-b border-primary/25 bg-primary/5">
+      <span id="selected-text" class="font-label-code-md text-caption text-primary">0 selected</span>
+      <div class="flex items-center gap-space-xs">
+        <button id="clear-selection" type="button" class="px-space-sm py-1 rounded bg-surface-raised border border-border-subtle text-text-secondary font-body-md text-body-sm hover:text-text-primary transition-colors">Clear</button>
+        <button id="bulk-delete" type="button" class="px-space-sm py-1 rounded bg-method-delete/10 border border-method-delete/30 text-method-delete font-body-md text-body-sm hover:border-method-delete/60 transition-colors">Delete selected</button>
+      </div>
     </div>
 
-    <input id="fileInput" class="fileInput" type="file" aria-label="Choose a file">
-
-    <div class="uploadControls">
-      <select id="expiry" aria-label="Expiration">
-        <option value="1h">Expires in 1 hour</option>
-        <option value="6h">Expires in 6 hours</option>
-        <option value="12h">Expires in 12 hours</option>
-        <option value="1d">Expires in 1 day</option>
-        <option value="3d">Expires in 3 days</option>
-        <option value="7d" selected>Expires in 7 days</option>
-        <option value="30d">Expires in 30 days</option>
-        <option value="90d">Expires in 90 days</option>
-        <option value="never">Never expires</option>
+    <div class="grid grid-cols-1 md:grid-cols-[1fr_180px_150px] gap-space-xs px-space-lg py-space-sm border-b border-border-subtle">
+      <input id="search" placeholder="Search by filename…" aria-label="Search files"
+        class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm placeholder:text-text-muted focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+      <select id="type-filter" aria-label="Filter by type"
+        class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+        <option value="">All types</option>
+        <option value="image/">Images</option>
+        <option value="video/">Videos</option>
+        <option value="audio/">Audio</option>
+        <option value="application/pdf">PDF</option>
+        <option value="text/">Text</option>
+        <option value="application/zip">ZIP</option>
       </select>
-
-      <button id="uploadButton" class="primary" onclick="upload()">Upload</button>
+      <select id="sort" aria-label="Sort by"
+        class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+        <option value="uploaded">Newest first</option>
+        <option value="name">Name</option>
+        <option value="size">Size</option>
+      </select>
     </div>
 
-    <div id="progress" class="progress" role="status"></div>
-  </div>
-</section>
-
-<section class="files" aria-label="Files">
-  <div class="fileTop">
-    <div>
-      <strong>Files</strong>
-      <span id="resultCount" class="muted small" style="margin-left:8px">—</span>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[940px]">
+        <thead>
+          <tr class="border-b border-border-subtle bg-surface-base">
+            <th class="w-10 px-space-md py-space-sm"><input id="select-all" type="checkbox" aria-label="Select all" class="rounded border-border-highlight bg-surface-deep text-primary focus:ring-primary/40"></th>
+            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">File</th>
+            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Size</th>
+            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Uploaded</th>
+            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Expires</th>
+            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
     </div>
-  </div>
+  </section>
 
-  <div id="bulk" class="bulk">
-    <span id="selectedText" class="small">0 selected</span>
-    <div style="display:flex;gap:6px">
-      <button onclick="clearSelection()">Clear</button>
-      <button class="danger" onclick="bulkDelete()">Delete selected</button>
-    </div>
-  </div>
-
-  <div class="fileSearch">
-    <input id="search" class="search" placeholder="Search by filename…" oninput="debouncedLoad()" aria-label="Search files">
-    <select id="typeFilter" onchange="loadFiles()" aria-label="Filter by type">
-      <option value="">All types</option>
-      <option value="image/">Images</option>
-      <option value="video/">Videos</option>
-      <option value="audio/">Audio</option>
-      <option value="application/pdf">PDF</option>
-      <option value="text/">Text</option>
-      <option value="application/zip">ZIP</option>
-    </select>
-    <select id="sort" onchange="loadFiles()" aria-label="Sort by">
-      <option value="uploaded">Newest first</option>
-      <option value="name">Name</option>
-      <option value="size">Size</option>
-    </select>
-  </div>
-
-  <div class="tableWrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="width:34px"><input id="selectAll" type="checkbox" onchange="toggleAll()" aria-label="Select all"></th>
-          <th>File</th>
-          <th>Size</th>
-          <th>Uploaded</th>
-          <th>Expires</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="files"></tbody>
-    </table>
-  </div>
-</section>
-
-</main>
 </div>
+</div>
+</main>
 
-<div id="toast" role="status"></div>
+<div id="toast" class="hidden fixed right-space-md bottom-space-md z-[80] max-w-sm px-space-md py-space-sm rounded-lg bg-surface-raised border border-border-subtle border-l-4 border-l-primary shadow-2xl font-body-md text-body-sm text-text-primary" role="status"></div>
 
-<div id="modal" class="modal" role="dialog" aria-modal="true" aria-label="File information">
-  <div class="modalCard">
-    <div class="modalTop">
-      <strong>File information</strong>
-      <button onclick="closeModal()" aria-label="Close">✕</button>
+<div id="modal" class="hidden fixed inset-0 z-[90] items-center justify-center p-space-md bg-black/70 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="File information">
+  <div class="w-full max-w-2xl max-h-[88vh] overflow-auto rounded-2xl bg-surface-card border border-border-highlight p-space-lg shadow-2xl rise">
+    <div class="flex items-center justify-between mb-space-md">
+      <span class="font-headline-sm text-headline-sm text-text-primary">File information</span>
+      <button id="modal-close" type="button" aria-label="Close" class="w-8 h-8 rounded bg-surface-raised border border-border-subtle flex items-center justify-center text-text-secondary hover:text-primary transition-colors">
+        <span class="material-symbols-outlined text-[18px]">close</span>
+      </button>
     </div>
-    <div id="modalBody" class="metaGrid"></div>
+    <div id="modal-body" class="grid grid-cols-1 sm:grid-cols-2 gap-space-xs"></div>
   </div>
 </div>
 
 <script>
-let files = [];
-const selected = new Set();
-let timer = null;
-
-/* ---------- API ---------- */
-
-async function api(path, options = {}) {
-  const response = await fetch(path, { ...options, credentials: "same-origin" });
-
-  if (response.status === 401) {
-    location.href = "/";
-    throw new Error("Session expired.");
-  }
-
-  return response;
-}
-
-async function refreshAll() {
-  await Promise.all([loadFiles(), loadStats()]);
-}
-
-/* ---------- file list ---------- */
-
-function skeletonRows() {
-  let rows = "";
-  for (let i = 0; i < 5; i++) {
-    rows += \`
-      <tr>
-        <td></td>
-        <td><div class="skel" style="width:70%"></div></td>
-        <td><div class="skel" style="width:46px"></div></td>
-        <td><div class="skel" style="width:90px"></div></td>
-        <td><div class="skel" style="width:56px"></div></td>
-        <td><div class="skel" style="width:150px"></div></td>
-      </tr>\`;
-  }
-  return rows;
-}
-
-async function loadFiles() {
-  const tbody = document.getElementById("files");
-  tbody.innerHTML = skeletonRows();
-
-  const params = new URLSearchParams({
-    limit: "1000",
-    sort: document.getElementById("sort").value,
-    order: "desc",
-  });
-
-  const search = document.getElementById("search").value.trim();
-  const type = document.getElementById("typeFilter").value;
-
-  if (search) params.set("search", search);
-  if (type) params.set("type", type);
-
-  try {
-    const response = await api("/api/files?" + params);
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error?.message || "Failed to load files.");
-    }
-
-    files = data.data || [];
-    renderFiles(files);
-  } catch (error) {
-    tbody.innerHTML = \`
-      <tr><td colspan="6">
-        <div class="empty">
-          <div class="emptyTitle">Could not load files</div>
-          <div class="emptyText">\${escapeHtml(error.message)}</div>
-        </div>
-      </td></tr>\`;
-  }
-}
-
-function renderFiles(list) {
-  const tbody = document.getElementById("files");
-
-  document.getElementById("resultCount").textContent =
-    list.length + (list.length === 1 ? " result" : " results");
-
-  if (!list.length) {
-    tbody.innerHTML = \`
-      <tr><td colspan="6">
-        <div class="empty">
-          <div class="emptyIcon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 17a4.5 4.5 0 0 1 .8-8.9A5.5 5.5 0 0 1 18 9.6 3.8 3.8 0 0 1 17.5 17h-11z"/></svg>
-          </div>
-          <div class="emptyTitle">Nothing here yet</div>
-          <div class="emptyText">Upload your first file above and it will show up in this list.</div>
-        </div>
-      </td></tr>\`;
-    updateBulk();
-    return;
-  }
-
-  tbody.innerHTML = "";
-
-  for (const file of list) {
-    const tr = document.createElement("tr");
-
-    const expiry = file.expires_at
-      ? \`<span class="pill yellow">\${relative(file.expires_at)}</span>\`
-      : \`<span class="pill green">never</span>\`;
-
-    tr.innerHTML = \`
-      <td><input type="checkbox" \${selected.has(file.id) ? "checked" : ""}
-        onchange="selectFile('\${attr(file.id)}', this.checked)" aria-label="Select file"></td>
-      <td>
-        <div class="fileCell">
-          <div class="fileIcon">\${fileIcon(file.content_type)}</div>
-          <div>
-            <div class="fileName" title="\${escapeHtml(file.name)}">\${escapeHtml(file.name)}</div>
-            <div class="fileType">\${escapeHtml(file.content_type)}</div>
-          </div>
-        </div>
-      </td>
-      <td class="num">\${formatBytes(file.size)}</td>
-      <td class="num">\${formatDate(file.uploaded_at)}</td>
-      <td>\${expiry}</td>
-      <td>
-        <div class="rowButtons">
-          <button onclick="openFile('\${attr(file.id)}')">Open</button>
-          <button onclick="downloadFile('\${attr(file.id)}')">Download</button>
-          <button onclick="showInfo('\${attr(file.id)}')">Info</button>
-          <button class="danger" onclick="deleteFile('\${attr(file.id)}')">Delete</button>
-        </div>
-      </td>\`;
-
-    tbody.appendChild(tr);
-  }
-
-  updateBulk();
-}
-
-/* ---------- stats ---------- */
-
-async function loadStats() {
-  try {
-    const response = await api("/api/stats");
-    const data = await response.json();
-    if (!response.ok) return;
-
-    document.getElementById("statFiles").textContent = data.files;
-    document.getElementById("statStorage").textContent = data.formatted_bytes;
-    document.getElementById("statExpired").textContent = data.expired;
-  } catch {}
-}
-
-/* ---------- upload ---------- */
-
-async function upload() {
-  const input = document.getElementById("fileInput");
-  const file = input.files[0];
-
-  if (!file) {
-    toast("Choose a file first.", true);
-    return;
-  }
-
-  const expiry = document.getElementById("expiry").value;
-  const progress = document.getElementById("progress");
-  const button = document.getElementById("uploadButton");
-
-  button.disabled = true;
-  progress.textContent = "uploading " + file.name + "…";
-
-  try {
-    const url = "/api/upload?" + new URLSearchParams({
-      filename: file.name,
-      expires: expiry,
-    });
-
-    const response = await api(url, {
-      method: "PUT",
-      headers: { "Content-Type": file.type || "application/octet-stream" },
-      body: file,
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error?.message || "Upload failed.");
-    }
-
-    progress.textContent = "upload complete";
-    toast("File uploaded.");
-
-    input.value = "";
-    await refreshAll();
-  } catch (error) {
-    progress.textContent = "";
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-/* ---------- file actions ---------- */
-
-function openFile(id) {
-  window.open("/api/files/" + encodeURIComponent(id), "_blank");
-}
-
-function downloadFile(id) {
-  window.open("/api/files/" + encodeURIComponent(id) + "?download=1", "_blank");
-}
-
-async function deleteFile(id) {
-  const file = files.find((f) => f.id === id);
-
-  if (!confirm("Delete " + (file?.name || "this file") + " permanently?")) {
-    return;
-  }
-
-  try {
-    const response = await api("/api/files/" + encodeURIComponent(id), {
-      method: "DELETE",
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error?.message || "Delete failed.");
-    }
-
-    selected.delete(id);
-    toast("File deleted.");
-    await refreshAll();
-  } catch (error) {
-    toast(error.message, true);
-  }
-}
-
-/* ---------- bulk ---------- */
-
-function selectFile(id, checked) {
-  if (checked) selected.add(id);
-  else selected.delete(id);
-  updateBulk();
-}
-
-function toggleAll() {
-  const checked = document.getElementById("selectAll").checked;
-
-  if (checked) {
-    for (const file of files) selected.add(file.id);
-  } else {
-    selected.clear();
-  }
-
-  renderFiles(files);
-}
-
-function clearSelection() {
-  selected.clear();
-  document.getElementById("selectAll").checked = false;
-  renderFiles(files);
-}
-
-function updateBulk() {
-  const bar = document.getElementById("bulk");
-  const text = document.getElementById("selectedText");
-
-  text.textContent = selected.size + " selected";
-  bar.style.display = selected.size ? "flex" : "none";
-}
-
-async function bulkDelete() {
-  if (!selected.size) return;
-
-  if (!confirm("Delete " + selected.size + " selected files?")) return;
-
-  try {
-    const response = await api("/api/files", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: Array.from(selected) }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error?.message || "Bulk delete failed.");
-    }
-
-    selected.clear();
-    toast(data.deleted + " files deleted.");
-    await refreshAll();
-  } catch (error) {
-    toast(error.message, true);
-  }
-}
-
-/* ---------- info modal ---------- */
-
-function showInfo(id) {
-  const file = files.find((f) => f.id === id);
-  if (!file) return;
-
-  const modal = document.getElementById("modal");
-  const body = document.getElementById("modalBody");
-  const url = location.origin + "/api/files/" + file.id;
-
-  body.innerHTML = \`
-    <div class="meta"><div class="metaLabel">Name</div><div class="metaValue">\${escapeHtml(file.name)}</div></div>
-    <div class="meta"><div class="metaLabel">Size</div><div class="metaValue mono">\${formatBytes(file.size)}</div></div>
-    <div class="meta"><div class="metaLabel">Content type</div><div class="metaValue mono">\${escapeHtml(file.content_type)}</div></div>
-    <div class="meta"><div class="metaLabel">Uploaded</div><div class="metaValue">\${formatDate(file.uploaded_at)}</div></div>
-    <div class="meta"><div class="metaLabel">Expires</div><div class="metaValue">\${file.expires_at ? formatDate(file.expires_at) : "Never"}</div></div>
-    <div class="meta"><div class="metaLabel">ID</div><div class="metaValue mono">\${escapeHtml(file.id)}</div></div>
-    <div class="meta"><div class="metaLabel">ETag</div><div class="metaValue mono">\${escapeHtml(file.etag || "—")}</div></div>
-    <div class="meta" style="grid-column:1/-1"><div class="metaLabel">API URL</div><div class="metaValue mono">\${escapeHtml(url)}</div></div>\`;
-
-  modal.style.display = "flex";
-}
-
-function closeModal() {
-  document.getElementById("modal").style.display = "none";
-}
-
-document.getElementById("modal").addEventListener("click", (event) => {
-  if (event.target.id === "modal") closeModal();
-});
-
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeModal();
-});
-
-/* ---------- drag & drop ---------- */
-
-const drop = document.getElementById("drop");
-const fileInput = document.getElementById("fileInput");
-
-drop.addEventListener("dragover", (event) => {
-  event.preventDefault();
-  drop.classList.add("drag");
-});
-
-drop.addEventListener("dragleave", (event) => {
-  if (!drop.contains(event.relatedTarget)) {
-    drop.classList.remove("drag");
-  }
-});
-
-drop.addEventListener("drop", (event) => {
-  event.preventDefault();
-  drop.classList.remove("drag");
-
-  if (event.dataTransfer.files.length) {
-    fileInput.files = event.dataTransfer.files;
-  }
-});
-
-/* ---------- search ---------- */
-
-function debouncedLoad() {
-  clearTimeout(timer);
-  timer = setTimeout(loadFiles, 250);
-}
+var files = [];
+var selected = {};
+var timer = null;
+
+var BTN =
+  "px-space-sm py-1 rounded bg-surface-raised border border-border-subtle font-body-md text-body-sm text-text-secondary hover:text-primary hover:border-primary transition-colors";
 
 /* ---------- helpers ---------- */
 
-function fileIcon(type) {
-  const svg = (inner) =>
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + inner + "</svg>";
-
-  if (type.startsWith("image/"))
-    return svg('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 19 5.5-5.5 3 3L17 13l4 4"/>');
-  if (type.startsWith("video/"))
-    return svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/>');
-  if (type.startsWith("audio/"))
-    return svg('<path d="M9 18V6l10-2v11"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="15" r="2.5"/>');
-  if (type.includes("pdf"))
-    return svg('<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>');
-  if (type.includes("zip") || type.includes("compressed"))
-    return svg('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M12 3v4M10 7h4M12 11v2"/>');
-  if (type.includes("json") || type.startsWith("text/"))
-    return svg('<path d="m8 9-3 3 3 3M16 9l3 3-3 3"/>');
-  return svg('<path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>');
+function esc(value) {
+  var div = document.createElement("div");
+  div.textContent = String(value == null ? "" : value);
+  return div.innerHTML;
 }
 
 function formatBytes(bytes) {
   bytes = Number(bytes) || 0;
   if (!bytes) return "0 B";
-
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const index = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1
-  );
-
-  return (
-    (bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 2) +
-    " " +
-    units[index]
-  );
+  var units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + " " + units[i];
 }
 
 function formatDate(value) {
@@ -3118,153 +2999,482 @@ function formatDate(value) {
 }
 
 function relative(value) {
-  const diff = new Date(value).getTime() - Date.now();
+  var diff = new Date(value).getTime() - Date.now();
   if (diff <= 0) return "expired";
 
-  const minutes = Math.floor(diff / 60000);
+  var minutes = Math.floor(diff / 60000);
   if (minutes < 60) return "in " + minutes + "m";
 
-  const hours = Math.floor(minutes / 60);
+  var hours = Math.floor(minutes / 60);
   if (hours < 24) return "in " + hours + "h";
 
   return "in " + Math.floor(hours / 24) + "d";
 }
 
-function escapeHtml(value) {
-  const div = document.createElement("div");
-  div.textContent = String(value ?? "");
-  return div.innerHTML;
+function glyph(type) {
+  type = String(type || "").toLowerCase();
+  if (type.indexOf("image/") === 0) return "image";
+  if (type.indexOf("video/") === 0) return "movie";
+  if (type.indexOf("audio/") === 0) return "graphic_eq";
+  if (type.indexOf("pdf") > -1) return "picture_as_pdf";
+  if (type.indexOf("zip") > -1 || type.indexOf("compressed") > -1) return "folder_zip";
+  if (type.indexOf("json") > -1 || type.indexOf("text/") === 0) return "terminal";
+  return "draft";
 }
 
-function attr(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+function selectedIds() {
+  return Object.keys(selected);
 }
 
-function toast(message, isError = false) {
-  const element = document.getElementById("toast");
+function toast(message, isError) {
+  var element = document.getElementById("toast");
 
   element.textContent = message;
-  element.className = isError ? "err" : "";
-  element.style.display = "block";
+  element.classList.remove("hidden", "border-l-primary", "border-l-method-delete");
+  element.classList.add(isError ? "border-l-method-delete" : "border-l-primary");
 
   clearTimeout(window.__toast);
-  window.__toast = setTimeout(() => {
-    element.style.display = "none";
+  window.__toast = setTimeout(function () {
+    element.classList.add("hidden");
   }, 3500);
 }
 
-async function logout() {
-  try {
-    await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
-  } finally {
-    location.href = "/";
-  }
-}
+/* ---------- API ---------- */
 
-/* initial load */
-refreshAll();
-</script>
-
-</body>
-</html>`,
-    {
-      headers: {
-        ...SECURITY_HEADERS,
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
+function api(path, options) {
+  return fetch(path, Object.assign({ credentials: "same-origin" }, options || {})).then(
+    function (response) {
+      if (response.status === 401) {
+        location.href = "/";
+        throw new Error("Session expired.");
+      }
+      return response;
     }
   );
 }
 
-/* ============================================================
-   404 PAGE
-   ============================================================ */
-
-function notFoundPage() {
-  return new Response(
-`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Page not found — Content Delivery</title>
-${FAVICON}
-${FONT_LINKS}
-<style>
-${BASE_CSS}
-
-.wrap {
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  text-align: center;
+function refreshAll() {
+  return Promise.all([loadFiles(), loadStats()]);
 }
 
-.code {
-  font-family: var(--mono);
-  font-size: 13px;
-  letter-spacing: .2em;
-  color: var(--accent);
-  text-transform: uppercase;
+/* ---------- list ---------- */
+
+function skeleton() {
+  var rows = "";
+
+  for (var i = 0; i < 5; i++) {
+    rows +=
+      '<tr class="border-b border-border-subtle/60">' +
+      '<td class="px-space-md py-space-sm"></td>' +
+      '<td class="px-space-md py-space-sm"><div class="h-4 w-2/3 rounded bg-surface-raised animate-pulse"></div></td>' +
+      '<td class="px-space-md py-space-sm"><div class="h-4 w-12 rounded bg-surface-raised animate-pulse"></div></td>' +
+      '<td class="px-space-md py-space-sm"><div class="h-4 w-24 rounded bg-surface-raised animate-pulse"></div></td>' +
+      '<td class="px-space-md py-space-sm"><div class="h-4 w-14 rounded bg-surface-raised animate-pulse"></div></td>' +
+      '<td class="px-space-md py-space-sm"><div class="h-4 w-40 rounded bg-surface-raised animate-pulse"></div></td>' +
+      "</tr>";
+  }
+
+  return rows;
 }
 
-h1 {
-  margin: 14px 0 10px;
-  font-size: clamp(32px, 5vw, 44px);
-  font-weight: 800;
-  letter-spacing: -.035em;
+function emptyRow(title, text) {
+  return (
+    '<tr><td colspan="6">' +
+    '<div class="flex flex-col items-center gap-space-xs py-space-3xl text-center">' +
+    '<div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center text-text-muted">' +
+    '<span class="material-symbols-outlined text-[24px]">inbox</span></div>' +
+    '<p class="font-headline-sm text-headline-sm text-text-primary">' + title + "</p>" +
+    '<p class="font-body-md text-body-md text-text-secondary">' + text + "</p>" +
+    "</div></td></tr>"
+  );
 }
 
-p {
-  color: var(--muted);
-  max-width: 26rem;
-  margin: 0 auto 26px;
-  line-height: 1.7;
+function loadFiles() {
+  var body = document.getElementById("rows");
+  body.innerHTML = skeleton();
+
+  var params = new URLSearchParams({
+    limit: "1000",
+    sort: document.getElementById("sort").value,
+    order: "desc",
+  });
+
+  var search = document.getElementById("search").value.trim();
+  var type = document.getElementById("type-filter").value;
+
+  if (search) params.set("search", search);
+  if (type) params.set("type", type);
+
+  return api("/api/files?" + params)
+    .then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error((data.error && data.error.message) || "Failed to load files.");
+        return data;
+      });
+    })
+    .then(function (data) {
+      files = data.data || [];
+      renderFiles();
+    })
+    .catch(function (error) {
+      body.innerHTML = emptyRow("Could not load files", esc(error.message));
+    });
 }
 
-.button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 18px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 600;
-  font-size: 14px;
-  text-decoration: none;
-  transition: background .16s, transform .14s;
+function renderFiles() {
+  var body = document.getElementById("rows");
+
+  document.getElementById("result-count").textContent =
+    files.length + (files.length === 1 ? " result" : " results");
+
+  if (!files.length) {
+    body.innerHTML = emptyRow(
+      "Nothing here yet",
+      "Upload your first file above and it will show up in this list."
+    );
+    updateBulk();
+    return;
+  }
+
+  body.innerHTML = "";
+
+  files.forEach(function (file) {
+    var tr = document.createElement("tr");
+    tr.className = "border-b border-border-subtle/60 hover:bg-surface-raised/40 transition-colors";
+
+    var expiry = file.expires_at
+      ? '<span class="px-space-xs py-0.5 rounded bg-method-post/15 text-method-post font-label-code-md text-caption">' +
+        relative(file.expires_at) + "</span>"
+      : '<span class="px-space-xs py-0.5 rounded bg-primary/15 text-primary font-label-code-md text-caption">never</span>';
+
+    var badge =
+      file.visibility === "public"
+        ? '<span class="ml-space-xs px-1.5 py-0.5 rounded bg-tertiary/15 text-tertiary font-label-code-md text-[10px] uppercase tracking-wider">public</span>'
+        : "";
+
+    tr.innerHTML =
+      '<td class="px-space-md py-space-sm align-middle">' +
+        '<input type="checkbox" data-select="' + esc(file.id) + '" ' +
+        (selected[file.id] ? "checked" : "") +
+        ' aria-label="Select file" class="rounded border-border-highlight bg-surface-deep text-primary focus:ring-primary/40"></td>' +
+      '<td class="px-space-md py-space-sm">' +
+        '<div class="flex items-center gap-space-sm min-w-0">' +
+          '<div class="w-9 h-9 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary shrink-0">' +
+            '<span class="material-symbols-outlined text-[18px]">' + glyph(file.content_type) + "</span></div>" +
+          '<div class="min-w-0">' +
+            '<p class="font-body-md text-body-md text-text-primary font-medium truncate max-w-[260px]" title="' + esc(file.name) + '">' + esc(file.name) + "</p>" +
+            '<p class="font-label-code-md text-caption text-text-muted truncate">' + esc(file.content_type) + badge + "</p>" +
+          "</div></div></td>" +
+      '<td class="px-space-md py-space-sm font-label-code-md text-caption text-text-secondary whitespace-nowrap">' + formatBytes(file.size) + "</td>" +
+      '<td class="px-space-md py-space-sm font-label-code-md text-caption text-text-secondary whitespace-nowrap">' + formatDate(file.uploaded_at) + "</td>" +
+      '<td class="px-space-md py-space-sm whitespace-nowrap">' + expiry + "</td>" +
+      '<td class="px-space-md py-space-sm">' +
+        '<div class="flex items-center gap-space-2xs">' +
+          '<button class="' + BTN + '" data-open="' + esc(file.id) + '">Open</button>' +
+          '<button class="' + BTN + '" data-download="' + esc(file.id) + '">Download</button>' +
+          (file.public_url
+            ? '<button class="' + BTN + '" data-copy="' + esc(file.id) + '">Copy link</button>'
+            : "") +
+          '<button class="' + BTN + '" data-info="' + esc(file.id) + '">Info</button>' +
+          '<button class="px-space-sm py-1 rounded bg-method-delete/10 border border-method-delete/30 font-body-md text-body-sm text-method-delete hover:border-method-delete/60 transition-colors" data-delete="' + esc(file.id) + '">Delete</button>' +
+        "</div></td>";
+
+    body.appendChild(tr);
+  });
+
+  updateBulk();
 }
 
-.button:hover { background: #8fe6b4; transform: translateY(-1px); }
-.button:active { transform: translateY(1px); }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="rise">
-    <div class="code">404</div>
-    <h1>That page doesn't exist</h1>
-    <p>The link may be wrong, or the page may have moved. Head back to the homepage to keep going.</p>
-    <a class="button" href="/">Back to Content Delivery</a>
-  </div>
-</div>
-</body>
-</html>`,
-    {
-      status: 404,
-      headers: {
-        ...SECURITY_HEADERS,
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
+/* ---------- stats ---------- */
+
+function loadStats() {
+  return api("/api/stats")
+    .then(function (response) {
+      return response.ok ? response.json() : null;
+    })
+    .then(function (data) {
+      if (!data) return;
+      document.getElementById("stat-files").textContent = data.files;
+      document.getElementById("stat-storage").textContent = data.formatted_bytes;
+      document.getElementById("stat-public").textContent = data.public_files || 0;
+      document.getElementById("stat-expired").textContent = data.expired;
+    })
+    .catch(function () {});
+}
+
+/* ---------- upload ---------- */
+
+function upload() {
+  var input = document.getElementById("file-input");
+  var file = input.files[0];
+
+  if (!file) {
+    toast("Choose a file first.", true);
+    return;
+  }
+
+  var progress = document.getElementById("progress");
+  var button = document.getElementById("upload-button");
+
+  button.disabled = true;
+  progress.textContent = "uploading " + file.name + "…";
+
+  var url =
+    "/api/upload?" +
+    new URLSearchParams({
+      filename: file.name,
+      expires: document.getElementById("expiry").value,
+    });
+
+  api(url, {
+    method: "PUT",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error((data.error && data.error.message) || "Upload failed.");
+        return data;
+      });
+    })
+    .then(function () {
+      progress.textContent = "upload complete";
+      toast("File uploaded.");
+      input.value = "";
+      return refreshAll();
+    })
+    .catch(function (error) {
+      progress.textContent = "";
+      toast(error.message, true);
+    })
+    .then(function () {
+      button.disabled = false;
+    });
+}
+
+/* ---------- row actions ---------- */
+
+function deleteFile(id) {
+  var file = files.filter(function (item) { return item.id === id; })[0];
+
+  if (!confirm("Delete " + ((file && file.name) || "this file") + " permanently?")) return;
+
+  api("/api/files/" + encodeURIComponent(id), { method: "DELETE" })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error((data.error && data.error.message) || "Delete failed.");
+        return data;
+      });
+    })
+    .then(function () {
+      delete selected[id];
+      toast("File deleted.");
+      return refreshAll();
+    })
+    .catch(function (error) {
+      toast(error.message, true);
+    });
+}
+
+function copyPublic(id) {
+  var file = files.filter(function (item) { return item.id === id; })[0];
+  if (!file || !file.public_url) return;
+
+  var url = location.origin + file.public_url;
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(
+      function () { toast("Link copied."); },
+      function () { toast(url); }
+    );
+  } else {
+    toast(url);
+  }
+}
+
+/* ---------- bulk ---------- */
+
+function updateBulk() {
+  var bar = document.getElementById("bulk");
+  var count = selectedIds().length;
+
+  document.getElementById("selected-text").textContent = count + " selected";
+
+  bar.classList.toggle("hidden", count === 0);
+  bar.classList.toggle("flex", count > 0);
+}
+
+function bulkDelete() {
+  var ids = selectedIds();
+  if (!ids.length) return;
+  if (!confirm("Delete " + ids.length + " selected files?")) return;
+
+  api("/api/files", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: ids }),
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error((data.error && data.error.message) || "Bulk delete failed.");
+        return data;
+      });
+    })
+    .then(function (data) {
+      selected = {};
+      toast(data.deleted + " files deleted.");
+      return refreshAll();
+    })
+    .catch(function (error) {
+      toast(error.message, true);
+    });
+}
+
+/* ---------- info modal ---------- */
+
+function metaCell(label, value, wide) {
+  return (
+    '<div class="rounded-lg bg-surface-deep border border-border-subtle p-space-md' +
+    (wide ? ' sm:col-span-2' : "") + '">' +
+    '<div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">' + label + "</div>" +
+    '<div class="mt-1 font-body-md text-body-sm text-text-primary break-all">' + value + "</div></div>"
+  );
+}
+
+function showInfo(id) {
+  var file = files.filter(function (item) { return item.id === id; })[0];
+  if (!file) return;
+
+  var body = document.getElementById("modal-body");
+
+  body.innerHTML =
+    metaCell("Name", esc(file.name)) +
+    metaCell("Size", formatBytes(file.size)) +
+    metaCell("Content type", esc(file.content_type)) +
+    metaCell("Visibility", esc(file.visibility || "private")) +
+    metaCell("Uploaded", formatDate(file.uploaded_at)) +
+    metaCell("Expires", file.expires_at ? formatDate(file.expires_at) : "Never") +
+    metaCell("ID", esc(file.id), true) +
+    metaCell("ETag", esc(file.etag || "—"), true) +
+    metaCell("API URL", esc(location.origin + "/api/files/" + file.id), true) +
+    (file.public_url
+      ? metaCell("Public link", esc(location.origin + file.public_url), true)
+      : "");
+
+  var modal = document.getElementById("modal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+}
+
+function closeModal() {
+  var modal = document.getElementById("modal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+/* ---------- wiring ---------- */
+
+document.getElementById("rows").addEventListener("click", function (event) {
+  var button = event.target.closest("button");
+  if (!button) return;
+
+  var id;
+
+  if ((id = button.getAttribute("data-open"))) {
+    window.open("/api/files/" + encodeURIComponent(id), "_blank");
+  } else if ((id = button.getAttribute("data-download"))) {
+    window.open("/api/files/" + encodeURIComponent(id) + "?download=1", "_blank");
+  } else if ((id = button.getAttribute("data-copy"))) {
+    copyPublic(id);
+  } else if ((id = button.getAttribute("data-info"))) {
+    showInfo(id);
+  } else if ((id = button.getAttribute("data-delete"))) {
+    deleteFile(id);
+  }
+});
+
+document.getElementById("rows").addEventListener("change", function (event) {
+  var id = event.target.getAttribute("data-select");
+  if (!id) return;
+
+  if (event.target.checked) selected[id] = true;
+  else delete selected[id];
+
+  updateBulk();
+});
+
+document.getElementById("select-all").addEventListener("change", function () {
+  if (this.checked) {
+    files.forEach(function (file) { selected[file.id] = true; });
+  } else {
+    selected = {};
+  }
+  renderFiles();
+});
+
+document.getElementById("clear-selection").addEventListener("click", function () {
+  selected = {};
+  document.getElementById("select-all").checked = false;
+  renderFiles();
+});
+
+document.getElementById("bulk-delete").addEventListener("click", bulkDelete);
+document.getElementById("upload-button").addEventListener("click", upload);
+document.getElementById("refresh").addEventListener("click", function () { refreshAll(); });
+document.getElementById("sort").addEventListener("change", loadFiles);
+document.getElementById("type-filter").addEventListener("change", loadFiles);
+
+document.getElementById("search").addEventListener("input", function () {
+  clearTimeout(timer);
+  timer = setTimeout(loadFiles, 250);
+});
+
+document.getElementById("modal-close").addEventListener("click", closeModal);
+
+document.getElementById("modal").addEventListener("click", function (event) {
+  if (event.target.id === "modal") closeModal();
+});
+
+document.addEventListener("keydown", function (event) {
+  if (event.key === "Escape") closeModal();
+});
+
+document.getElementById("logout").addEventListener("click", function () {
+  fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).finally(function () {
+    location.href = "/";
+  });
+});
+
+/* ---------- drag and drop ---------- */
+
+(function () {
+  var target = document.getElementById("drop-target");
+  var input = document.getElementById("file-input");
+
+  ["dragenter", "dragover"].forEach(function (name) {
+    target.addEventListener(name, function (event) {
+      event.preventDefault();
+      target.classList.add("border-primary", "bg-primary/5");
+    });
+  });
+
+  target.addEventListener("dragleave", function (event) {
+    if (!target.contains(event.relatedTarget)) {
+      target.classList.remove("border-primary", "bg-primary/5");
     }
+  });
+
+  target.addEventListener("drop", function (event) {
+    event.preventDefault();
+    target.classList.remove("border-primary", "bg-primary/5");
+    if (event.dataTransfer.files.length) input.files = event.dataTransfer.files;
+  });
+})();
+
+refreshAll();
+</script>
+
+</body>
+</html>`
   );
 }
