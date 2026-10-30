@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Content Delivery — send a file, get a link</title>
+<meta name="description" content="Drop a file, get a link. Files are stored on Cloudflare R2 and delete themselves after seven days.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,400..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --glass:#0a0b0c;
+  --glass-2:#101113;
+  --glass-3:#16181b;
+  --amber:#ffb000;
+  --amber-dim:#c98a05;
+  --amber-16:rgba(255,176,0,.16);
+  --amber-30:rgba(255,176,0,.30);
+  --amber-60:rgba(255,176,0,.60);
+  --ink:#eceded;
+  --ink-2:#b9bcc0;
+  --mute:#8b9096;
+  --hair:rgba(255,255,255,.09);
+  --hair-2:rgba(255,255,255,.05);
+  --bad:#ff6b5e;
+  --f:"Archivo","Archivo Narrow","Segoe UI",system-ui,sans-serif;
+  --m:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--glass);color:var(--ink);font:400 16px/1.6 var(--f);font-stretch:88%;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;min-height:100vh;display:flex;flex-direction:column}
+::selection{background:var(--amber);color:#0a0b0c}
+:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+*{scrollbar-width:thin;scrollbar-color:#3a3d42 transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#3a3d42;border-radius:0;border:3px solid var(--glass)}
+::-webkit-scrollbar-thumb:hover{background:var(--amber-dim)}
+a{color:inherit;text-decoration:none}
+h1,h2,h3{margin:0;font-weight:800;font-stretch:76%;letter-spacing:-.005em;line-height:1.02;text-wrap:balance}
+p{margin:0}
+.skip{position:absolute;left:-9999px;top:6px;z-index:99;background:var(--amber);color:#0a0b0c;padding:8px 14px;font-weight:700;font-stretch:80%}
+.skip:focus{left:8px}
+.mono{font-family:var(--m);font-variant-numeric:tabular-nums;font-size:13px;letter-spacing:-.01em}
+.caps{font-stretch:74%;text-transform:uppercase;letter-spacing:.13em;font-weight:700}
+
+/* ---------- bar ---------- */
+.bar{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--glass) 92%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--hair)}
+.bar-in{max-width:1240px;margin:0 auto;padding:0 20px;height:58px;display:flex;align-items:center;gap:20px}
+.mark{display:flex;align-items:center;gap:11px;font-weight:800;font-stretch:74%;text-transform:uppercase;letter-spacing:.14em;font-size:13px}
+.mark i{width:24px;height:24px;display:grid;place-items:center;background:var(--amber);color:#0a0b0c;border-radius:2px}
+.bar nav{display:flex;gap:2px;margin-left:auto}
+.bar nav a{padding:7px 11px;font-size:12px;font-stretch:76%;text-transform:uppercase;letter-spacing:.12em;font-weight:700;color:var(--mute);border-radius:2px;transition:color .15s,background .15s}
+.bar nav a:hover{color:var(--ink);background:var(--glass-2)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;height:38px;padding:0 16px;border:1px solid var(--hair);background:var(--glass-2);color:var(--ink);font:700 12px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;border-radius:2px;cursor:pointer;transition:background .15s,color .15s,border-color .15s,transform .12s}
+.btn:hover{border-color:var(--amber-60);color:#fff}
+.btn:active{transform:translateY(1px)}
+.btn.pri{background:var(--amber);border-color:var(--amber);color:#0a0b0c}
+.btn.pri:hover{background:#ffc23d;color:#0a0b0c}
+.btn.gh{background:transparent}
+
+/* ---------- sheet + lanes ---------- */
+main{flex:1}
+.sheet{max-width:1240px;margin:0 auto;padding:0 20px}
+.lane{display:grid;grid-template-columns:88px minmax(0,1fr);column-gap:0}
+.lane>*:first-child{border-right:1px solid var(--hair)}
+.gun{position:relative;padding:34px 14px 0 0;text-align:right}
+.gun b{display:block;font-family:var(--m);font-size:11px;font-weight:500;color:var(--mute);letter-spacing:.06em}
+.gun .rail{position:absolute;right:-1px;top:0;bottom:0;width:1px;background:var(--hair)}
+.gun .tick{position:absolute;right:-4px;width:7px;height:1px;background:var(--amber-60)}
+.body{padding:34px 0 0 30px;min-width:0}
+.lane+.lane .gun,.lane+.lane .body{border-top:1px solid var(--hair)}
+
+/* ---------- plate ---------- */
+.plate-wrap{padding:22px 0 0 30px}
+.plate{position:relative;background:var(--amber);color:#0a0b0c;overflow:hidden}
+.plate-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-bottom:1px solid rgba(10,11,12,.22);font-stretch:74%;text-transform:uppercase;letter-spacing:.14em;font-size:11px;font-weight:800}
+.plate-head .r{display:flex;gap:18px;opacity:.72}
+.plate h1{font-size:clamp(50px,8.6vw,112px);line-height:.84;letter-spacing:-.015em;font-weight:800;font-stretch:70%;padding:26px 20px 0;text-transform:uppercase}
+.plate h1 span{display:block}
+.plate .lede{padding:20px 20px 0;max-width:44ch;font-size:16.5px;font-weight:500;color:#231a05;font-stretch:92%;line-height:1.45}
+
+/* ---------- drop field ---------- */
+.field{position:relative;margin:26px 20px 0;background:var(--glass);color:var(--ink);border:1px solid rgba(10,11,12,.35);box-shadow:inset 0 0 0 1px rgba(255,176,0,.12)}
+.field .head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 14px;border-bottom:1px solid var(--hair)}
+.field .head span{font-family:var(--m);font-size:11px;color:var(--mute);letter-spacing:.04em}
+.drop{position:relative;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:20px;padding:26px 20px;cursor:pointer;background:var(--glass);overflow:hidden}
+.drop:hover,.drop.over{background:#0f1113}
+.drop input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.drop .leds{display:grid;grid-template-columns:repeat(2,7px);gap:7px;justify-items:center}
+.drop .leds i{width:7px;height:7px;background:rgba(255,255,255,.14);border-radius:50%;transition:background .2s}
+.drop.over .leds i{background:var(--amber);box-shadow:0 0 10px var(--amber-60)}
+.drop .say b{display:block;font-stretch:74%;text-transform:uppercase;letter-spacing:.1em;font-size:17px;font-weight:800;color:#fff}
+.drop .say em{font-style:normal;color:var(--mute);font-size:14px;letter-spacing:0}
+.drop .go{font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:800;color:var(--amber);border:1px solid var(--amber-30);padding:9px 14px;border-radius:2px;white-space:nowrap}
+@keyframes drift{to{background-position:-14px 0}}
+.facts{display:flex;flex-wrap:wrap;gap:0;border-top:1px solid var(--hair);background:#0c0d0f}
+.facts span{flex:1 1 auto;padding:10px 14px;font-family:var(--m);font-size:11px;color:var(--mute);letter-spacing:.03em;border-right:1px solid var(--hair);white-space:nowrap}
+.facts span:last-child{border-right:0}
+.facts b{color:var(--amber);font-weight:500}
+
+/* ---------- queue + links ---------- */
+.queue{display:grid;gap:0;border-top:1px solid var(--hair)}
+.q{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--hair-2);animation:rise .4s cubic-bezier(.16,1,.3,1) both}
+.q .nm{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q .sub{font-family:var(--m);font-size:11px;color:var(--mute);margin-top:3px;display:flex;gap:10px;align-items:center}
+.q .meter{width:120px;height:2px;background:rgba(255,255,255,.1)}
+.q .meter i{display:block;height:100%;width:0;background:var(--amber);transition:width .25s}
+.q.fail{border-left:0}
+.q .err{grid-column:1/-1;color:var(--bad);font-size:13px;font-family:var(--m)}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.links-panel{margin:0;border-top:1px solid var(--hair)}
+.links-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-bottom:1px solid var(--hair-2)}
+.links-head b{font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;font-size:11px}
+.links-head em{font-style:normal;color:var(--mute);font-family:var(--m);font-size:11px;margin-left:10px;text-transform:none;letter-spacing:0}
+.slip{display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--hair-2);animation:rise .4s cubic-bezier(.16,1,.3,1) both}
+.slip:last-child{border-bottom:0}
+.slip .nm{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slip .sub{font-family:var(--m);font-size:11px;color:var(--mute);margin-top:3px}
+.slip .sub b{color:var(--amber);font-weight:500}
+.slip .acts{display:flex;gap:4px}
+.ib{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--hair);background:transparent;color:var(--ink-2);border-radius:2px;cursor:pointer;transition:.15s}
+.ib:hover{color:var(--amber);border-color:var(--amber-60)}
+.ib svg{width:15px;height:15px}
+
+/* ---------- sections ---------- */
+.sec-h{font-size:clamp(30px,3.6vw,48px);text-transform:uppercase;letter-spacing:-.01em;font-stretch:72%}
+.sec-p{color:var(--ink-2);max-width:58ch;margin-top:14px;font-size:16px;font-stretch:94%;line-height:1.6}
+.sec-p b{color:var(--ink);font-weight:600}
+
+/* ---------- expiry schedule ---------- */
+.sched{margin-top:26px;border-top:1px solid var(--hair)}
+.sr{position:relative;display:grid;grid-template-columns:88px minmax(0,1fr) 150px;align-items:center;gap:0;border-bottom:1px solid var(--hair);background:transparent;width:100%;text-align:left;padding:0;color:inherit;font:inherit;cursor:pointer;transition:background .15s}
+.sr:hover{background:var(--glass-2)}
+.sr:hover .d{background:var(--glass-2)}
+.sr[aria-pressed="true"] .d{background:#1d1a0f}
+.sr .t{font-family:var(--m);font-size:13px;font-weight:500;padding:11px 14px;border-right:1px solid var(--hair);color:var(--ink);letter-spacing:.02em}
+.sr .r{padding:0 16px;position:relative;height:40px;display:flex;align-items:center;overflow:hidden}
+.sr .r svg{width:100%;height:20px;overflow:visible}
+.sr .r .rail-line{stroke:var(--amber-30);stroke-width:1}
+.sr .r .rail-mark{stroke:var(--amber);stroke-width:1.25;fill:none}
+.sr[aria-pressed="true"] .r .rail-line{stroke:var(--amber);stroke-width:1}
+.sr[aria-pressed="true"]{background:var(--amber-16)}
+.sr[aria-pressed="true"] .t{color:var(--amber)}
+.sr .d{font-family:var(--m);font-size:11px;color:var(--mute);padding:0 16px 0 0;text-align:right;letter-spacing:.02em;position:relative;z-index:1;background:var(--glass);height:100%;display:flex;align-items:center;justify-content:flex-end}
+.sr.on .d{color:var(--ink-2)}
+.readout{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 18px;padding:16px 0 0;font-family:var(--m);font-size:12px;color:var(--mute)}
+.readout b{color:var(--amber);font-weight:500}
+.readout .sep{width:1px;height:12px;background:var(--hair)}
+
+/* ---------- api ---------- */
+.api{margin-top:26px;border:1px solid var(--hair);background:var(--glass-2)}
+.tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--hair);scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{position:relative;display:inline-flex;align-items:center;gap:10px;padding:12px 16px;background:transparent;border:0;border-right:1px solid var(--hair);color:var(--mute);font:700 11px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;cursor:pointer;white-space:nowrap;transition:.15s}
+.tab .verb{font-family:var(--m);font-size:10px;letter-spacing:0;padding:3px 5px;border:1px solid var(--hair);color:var(--ink-2)}
+.tab:hover{color:var(--ink);background:var(--glass-3)}
+.tab[aria-selected="true"]{color:var(--amber);background:var(--glass)}
+.tab[aria-selected="true"] .verb{border-color:var(--amber-60);color:var(--amber)}
+.tab[aria-selected="true"]:after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--amber)}
+.pane{padding:20px 18px}
+.req{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+.req .line{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;font-family:var(--m);font-size:13px;color:var(--ink-2)}
+.req .line .u{color:#fff}
+.req .line .k{color:var(--amber)}
+pre{margin:0;padding:15px 16px;background:var(--glass);border:1px solid var(--hair);overflow-x:auto;font:13px/1.65 var(--m);color:var(--ink-2);tab-size:2}
+pre .c{color:#6f747a}
+pre .s{color:#e8e9ea}
+pre .a{color:var(--amber)}
+pre .n{color:#c9a76b}
+.lbl{font-family:var(--m);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);margin-bottom:7px}
+
+/* ---------- patch in ---------- */
+.patch{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:0;margin-top:26px;border:1px solid var(--hair)}
+.patch .l{padding:24px 22px;border-right:1px solid var(--hair);background:var(--glass-2)}
+.patch .r{padding:24px 22px}
+.patch h3{font-size:24px;text-transform:uppercase;font-stretch:72%;letter-spacing:.01em}
+.patch p{color:var(--ink-2);font-size:14px;margin-top:8px;max-width:38ch}
+.fld{margin-top:18px}
+.inp{display:flex;gap:8px}
+input[type=password],input[type=text]{width:100%;height:40px;padding:0 12px;background:var(--glass);border:1px solid var(--hair);color:var(--ink);font:13px var(--m);border-radius:2px}
+input:focus{outline:none;border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}
+.err{display:none;margin-top:12px;padding:9px 11px;border:1px solid rgba(255,107,94,.4);color:var(--bad);font:12px var(--m);background:rgba(255,107,94,.06)}
+.err.on{display:block}
+.cats{list-style:none;padding:0;margin:16px 0 0;border-top:1px solid var(--hair)}
+.cats li{display:grid;grid-template-columns:1fr auto;gap:12px;padding:9px 0;border-bottom:1px solid var(--hair-2);font-size:14px;color:var(--ink-2)}
+.cats li b{color:var(--ink);font-weight:600}
+.cats li span{font-family:var(--m);font-size:11px;color:var(--mute)}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--hair);margin-top:0}
+.foot{max-width:1240px;margin:0 auto;padding:20px;display:flex;flex-wrap:wrap;gap:14px 26px;align-items:center;font-family:var(--m);font-size:11px;color:var(--mute);letter-spacing:.02em}
+.foot a:hover{color:var(--amber)}
+.foot .sp{margin-left:auto}
+.toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,16px);opacity:0;pointer-events:none;background:var(--amber);color:#0a0b0c;padding:10px 16px;font:700 11px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;transition:.22s cubic-bezier(.16,1,.3,1);z-index:70;border-radius:2px}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+@media (max-width:900px){
+  .patch{grid-template-columns:1fr}
+  .patch .l{border-right:0;border-bottom:1px solid var(--hair)}
+}
+@media (max-width:760px){
+  .lane{grid-template-columns:44px minmax(0,1fr)}
+  .plate-wrap{padding:16px 0 0 16px}
+  .body{padding:26px 0 0 16px}
+  .plate h1{padding:20px 14px 0}
+  .plate .lede{padding:16px 14px 0;font-size:15px}
+  .field{margin:20px 14px 0}
+  .drop{grid-template-columns:1fr;gap:14px;padding:20px 14px;text-align:left}
+  .drop .go{justify-self:start}
+  .sr{grid-template-columns:60px minmax(0,1fr)}
+  .sr .d{display:none}
+  .bar nav{display:none}
+  .bar-in{gap:10px;height:54px;padding:0 14px}
+  .mark{font-size:11px;letter-spacing:.1em;gap:8px}
+  .mark i{width:21px;height:21px}
+  .btn.gh{display:none}
+  .bar .btn.pri{margin-left:auto;height:34px;padding:0 12px;font-size:10.5px;letter-spacing:.1em}
+  .facts span{flex:1 1 calc(50% - 1px);border-right:0;border-bottom:1px solid var(--hair);font-size:10.5px;padding:9px 12px}
+  .facts span:nth-child(odd){border-right:1px solid var(--hair)}
+  .plate-head{font-size:9.5px;letter-spacing:.1em;padding:11px 14px;gap:10px}
+  .plate-head .r{gap:10px}
+  pre{font-size:11.5px;line-height:1.7}
+  .readout{font-size:11px}
+  .sec-h{font-size:clamp(26px,8vw,34px)}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important;scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar"><div class="bar-in">
+  <a class="mark" href="/"><i><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></i>Content Delivery</a>
+  <nav>
+    <a href="#drop">Drop</a>
+    <a href="#expiry">Expiry</a>
+    <a href="#api">API</a>
+    <a href="#docs">Docs</a>
+  </nav>
+    <a class="btn gh" href="#patch">Owner sign-in</a>
+    <a class="btn pri" href="#patch">Dashboard</a>
+</div></header>
+
+<main id="main">
+<div class="sheet">
+
+<!-- LANE 01 -->
+<div class="lane" id="drop">
+  <div class="gun"><b>01</b><span class="tick" style="top:44px"></span></div>
+  <div class="plate-wrap">
+    <div class="plate">
+      <div class="plate-head"><span>Public drop &middot; no key</span><span class="r"><span>R2 edge</span><span>7-day ttl</span></span></div>
+      <h1><span>Send a file.</span><span>Get a link.</span></h1>
+      <p class="lede">Anyone with the link can open it in a browser or pull the bytes straight down. Seven days later it is gone, and nobody has to clean up.</p>
+
+      <div class="field">
+        <div class="head"><span>/public/upload</span><span>100 MB per file</span></div>
+        <div class="drop" id="drop-target">
+          <input id="file-input" type="file" multiple aria-label="Choose files">
+          <div class="leds" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <div class="say"><b>Drop files here</b><em>or paste from the clipboard &mdash; the link appears right here</em></div>
+          <span class="go">Choose files</span>
+        </div>
+        <div class="facts"><span><b>7 days</b> then deleted</span><span><b>100 MB</b> per file</span><span><b>Any</b> file type</span><span><b>No account</b> needed</span></div>
+        <div id="queue" aria-live="polite"></div>
+        <div id="links-panel" class="links-panel" hidden>
+          <div class="links-head"><div><b>Your links</b><em>kept in this browser only</em></div><button id="clear-links" class="btn" type="button" style="height:28px;font-size:10px">Clear all</button></div>
+          <div id="links"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- LANE 02 -->
+<div class="lane" id="expiry">
+  <div class="gun"><b>02</b><span class="tick" style="top:44px"></span></div>
+  <div class="body">
+    <h2 class="sec-h">Every file carries its own lifetime</h2>
+    <p class="sec-p">Pick a lifetime at upload and the store forgets the file on its own. A scheduled sweep clears what has expired, and a download past its date deletes it on the spot. Nothing is kept by accident.</p>
+    <div class="sched" id="sched" role="group" aria-label="Supported expirations"></div>
+    <div class="readout"><span>Upload now &rarr; deletes <b id="ro-date">&mdash;</b></span><span class="sep"></span><span id="ro-note">&nbsp;</span></div>
+  </div>
+</div>
+
+<!-- LANE 03 -->
+<div class="lane" id="api">
+  <div class="gun"><b>03</b><span class="tick" style="top:44px"></span></div>
+  <div class="body">
+    <h2 class="sec-h">One HTTP call, no client library</h2>
+    <p class="sec-p">The dashboard is a convenience. Every action in it is a plain request you can send from a terminal, a script, or anything that speaks HTTP. Range requests work, so video seeks and downloads resume.</p>
+    <div class="api">
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div class="pane" id="pane"></div>
+    </div>
+  </div>
+</div>
+
+<!-- LANE 04 -->
+<div class="lane" id="patch">
+  <div class="gun"><b>04</b><span class="tick" style="top:44px"></span></div>
+  <div class="body">
+    <h2 class="sec-h">Owner sign-in</h2>
+    <p class="sec-p">Your API key opens the dashboard and every private endpoint. It is the only credential in the system.</p>
+    <div class="patch">
+      <div class="l">
+        <h3 style="font-size:18px">Patch in</h3>
+        <p>Paste the key you set with <span class="mono" style="color:var(--amber)">wrangler secret put API_KEY</span>.</p>
+        <form id="login" novalidate style="margin-top:2px">
+          <div class="fld"><label class="lbl" for="key">API key</label>
+            <div class="inp"><input id="key" type="password" autocomplete="current-password" placeholder="paste key"><button id="reveal" class="ib" type="button" aria-label="Show key" style="height:40px;width:40px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg></button></div>
+          </div>
+          <div class="err" id="login-err" role="alert"></div>
+          <button class="btn pri" type="submit" style="width:100%;margin-top:14px;height:40px" id="login-btn"><span id="login-label">Sign in</span></button>
+        </form>
+      </div>
+      <div class="r">
+        <h3 style="font-size:18px;color:var(--ink-2)">Behind the key</h3>
+        <ul class="cats">
+          <li><b>Every file, searchable</b><span>name &middot; type &middot; size</span></li>
+          <li><b>Storage totals</b><span>bytes &middot; count &middot; expired</span></li>
+          <li><b>Bulk delete</b><span>1000 per call</span></li>
+          <li><b>Per-file metadata</b><span>etag &middot; expiry &middot; url</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+</main>
+
+<footer><div class="foot">
+  <span>Content Delivery &mdash; Cloudflare Workers + R2</span>
+  <a href="#docs">API docs</a>
+  <a href="#patch">Dashboard</a>
+  <span class="sp">v4.0.0</span>
+</div></footer>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+var ICO={down:"<path d=\"M12 4v12m0 0 4-4m-4 4-4-4M4 20h16\"/>",copy:"<rect x=\"9\" y=\"9\" width=\"11\" height=\"11\" rx=\"1\"/><path d=\"M5 15V6a2 2 0 0 1 2-2h8\"/>",x:"<path d=\"M6 6l12 12M18 6 6 18\"/>",out:"<path d=\"M14 4h6v6m0-6L10 14M18 14v5H5V5h5\"/>"};
+function ic(n){return "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\">"+ICO[n]+"</svg>"}
+function esc(v){var d=document.createElement("div");d.textContent=String(v==null?"":v);return d.innerHTML}
+function fmt(b){b=Number(b)||0;if(!b)return"0 B";var u=["B","KB","MB","GB","TB"],i=Math.min(Math.floor(Math.log(b)/Math.log(1024)),4);return(b/Math.pow(1024,i)).toFixed(i?1:0)+" "+u[i]}
+function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");clearTimeout(window.__t);window.__t=setTimeout(function(){e.classList.remove("on")},2200)}
+function copy(t){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){toast("Link copied")},function(){window.prompt("Copy",t)})}else window.prompt("Copy",t)}
+
+/* ---- expiry schedule ---- */
+var EXP=[["1h",3600e3],["6h",6*3600e3],["12h",12*3600e3],["1d",864e5],["3d",3*864e5],["7d",7*864e5],["30d",30*864e5],["90d",90*864e5],["never",null]];
+var sched=document.getElementById("sched"),roD=document.getElementById("ro-date"),roN=document.getElementById("ro-note");
+function rail(i,len,sel){
+  var w=Math.max(6,len*100);
+  var s="<svg viewBox=\"-4 0 108 20\" preserveAspectRatio=\"none\" aria-hidden=\"true\">";
+  s+="<line class=\"rail-line\" x1=\"0\" y1=\"10\" x2=\"100\" y2=\"10\"/>";
+  if(sel)s+="<line class=\"rail-line\" x1=\"0\" y1=\"13\" x2=\"100\" y2=\"13\"/>";
+  s+="<line class=\"rail-mark\" x1=\"0\" y1=\"4\" x2=\"0\" y2=\"16\"/>";
+  if(len===null){
+    s+="<line class=\"rail-mark\" x1=\"0\" y1=\"10\" x2=\"100\" y2=\"10\"/>";
+    s+="<circle class=\"rail-mark\" cx=\"100\" cy=\"10\" r=\"3.4\"/>";
+  }else{
+    s+="<line class=\"rail-mark\" x1=\"0\" y1=\"10\" x2=\""+w+"\" y2=\"10\"/>";
+    if(sel){
+      s+="<line class=\"rail-mark\" x1=\"0\" y1=\"7\" x2=\""+w+"\" y2=\"7\"/>";
+      s+="<line class=\"rail-mark\" x1=\"0\" y1=\"13\" x2=\""+w+"\" y2=\"13\"/>";
+    }
+    s+="<line class=\"rail-mark\" x1=\""+w+"\" y1=\"4\" x2=\""+w+"\" y2=\"16\"/>";
+  }
+  return s+"</svg>";
+}
+var DEST={"1h":"one working session","6h":"overnight","12h":"half a day","1d":"a day","3d":"a weekend","7d":"a week","30d":"a month","90d":"a quarter","never":"kept until deleted"};
+EXP.forEach(function(pair,i){
+  var name=pair[0],ms=pair[1];
+  var len=ms?Math.min(1,Math.max(.06,Math.log(ms/3600e3)/Math.log(2160))):null;
+  var b=document.createElement("button");
+  b.type="button";b.className="sr";b.setAttribute("aria-pressed",name==="7d"?"true":"false");
+  b.innerHTML="<span class=\"t\">"+name+"</span><span class=\"r\">"+rail(i,len,name==="7d")+"</span><span class=\"d\">"+DEST[name]+"</span>";
+  b.addEventListener("click",function(){
+    Array.prototype.forEach.call(sched.children,function(c){c.setAttribute("aria-pressed","false");});
+    b.setAttribute("aria-pressed","true");readout(ms);
+  });
+  sched.appendChild(b);
+});
+function readout(ms){
+  if(ms===null){roD.textContent="never";roN.textContent="stays until you delete it";return}
+  var d=new Date(Date.now()+ms);
+  roD.textContent=d.toISOString().replace("T"," ").slice(0,16)+" UTC";
+  roN.textContent="swept by the next cron run";
+}
+readout(7*864e5);
+
+/* ---- api tabs ---- */
+var TABS=[
+  {verb:"PUT",path:"/api/upload",tag:"stream in",
+   req:"curl -X PUT \"https://cdn.nullstacks.workers.dev/api/upload?filename=clip.mp4&amp;expires=7d\" \\\n  -H \"authorization: Bearer $KEY\" \\\n  -H \"content-type: video/mp4\" \\\n  --data-binary @clip.mp4",
+   res:"{\n  \"id\": \"a4e3c1…\",\n  \"name\": \"clip.mp4\",\n  \"size\": 184320000,\n  \"expires_at\": \"2026-11-06T14:43Z\",\n  \"download_url\": \"/api/files/a4e3c1…\"\n}"},
+  {verb:"GET",path:"/api/files",tag:"list + search",
+   req:"curl \"https://cdn.nullstacks.workers.dev/api/files?search=clip&amp;sort=size&amp;order=desc\" \\\n  -H \"authorization: Bearer $KEY\"",
+   res:"{\n  \"data\": [ { \"id\": \"a4e3c1…\", \"name\": \"clip.mp4\", \"size\": 184320000 } ],\n  \"pagination\": { \"cursor\": null, \"has_more\": false },\n  \"count\": 1\n}"},
+  {verb:"GET",path:"/api/files/:id",tag:"range bytes",
+   req:"curl \"https://cdn.nullstacks.workers.dev/api/files/a4e3c1…\" \\\n  -H \"range: bytes=0-1023\" \\\n  -H \"authorization: Bearer $KEY\"",
+   res:"HTTP/1.1 206 Partial Content\ncontent-range: bytes 0-1023/184320000\naccept-ranges: bytes\ncontent-type: video/mp4"},
+  {verb:"DELETE",path:"/api/files",tag:"bulk up to 1000",
+   req:"curl -X DELETE \"https://cdn.nullstacks.workers.dev/api/files\" \\\n  -H \"authorization: Bearer $KEY\" \\\n  -H \"content-type: application/json\" \\\n  -d \"{\\\"ids\\\":[\\\"a4e3c1…\\\",\\\"d4e5f6…\\\"]}\"",
+   res:"{ \"deleted\": 2 }"}
+];
+var tabs=document.getElementById("tabs"),pane=document.getElementById("pane");
+function paintCode(txt){
+  var parts=txt.split("\n"),out="";
+  parts.forEach(function(l){
+    if(/^curl|^HTTP/.test(l)){out+="<span class=\"a\">"+esc(l)+"</span>\n"}
+    else if(/^\s*-H|^\s*-d/.test(l)){out+="<span class=\"n\">"+esc(l)+"</span>\n"}
+    else if(/^\{/.test(l)||/^\s*\"/.test(l)){out+="<span class=\"s\">"+esc(l)+"</span>\n"}
+    else out+=esc(l)+"\n";
+  });
+  return out;
+}
+function selectTab(i){
+  Array.prototype.forEach.call(tabs.children,function(c,j){c.setAttribute("aria-selected",j===i?"true":"false")});
+  var t=TABS[i];
+  pane.innerHTML="<div class=\"req\">"
+    +"<div><div class=\"lbl\">Request &middot; "+esc(t.tag)+"</div><pre>"+paintCode(t.req)+"</pre></div>"
+    +"<div><div class=\"lbl\">Response</div><pre>"+paintCode(t.res)+"</pre></div>"
+  +"</div>";
+}
+TABS.forEach(function(t,i){
+  var b=document.createElement("button");b.type="button";b.className="tab";b.setAttribute("role","tab");
+  b.innerHTML="<span class=\"verb\">"+t.verb+"</span>"+esc(t.path);
+  b.addEventListener("click",function(){selectTab(i)});
+  tabs.appendChild(b);
+});
+selectTab(0);
+
+/* ---- uploader ---- */
+var MAX=100*1024*1024,STORE="cdn.links.v2",TTL=7*864e5;
+var tg=document.getElementById("drop-target"),pk=document.getElementById("file-input"),q=document.getElementById("queue"),pn=document.getElementById("links-panel"),bx=document.getElementById("links"),wait=[],busy=false;
+function rd(){try{var l=JSON.parse(localStorage.getItem(STORE)||"[]");return Array.isArray(l)?l:[]}catch(e){return[]}}
+function wr(l){try{localStorage.setItem(STORE,JSON.stringify(l))}catch(e){}}
+function liveL(l){var n=Date.now();return l.filter(function(e){return e&&e.id&&e.url&&(!e.expires_at||Date.parse(e.expires_at)>n)})}
+function left(iso){if(!iso)return"no expiry";var d=Date.parse(iso)-Date.now();if(d<=0)return"expired";var m=Math.floor(d/6e4),h=Math.floor(m/60),dd=Math.floor(h/24);return dd>=2?dd+"d "+(h%24)+"h":h>=1?h+"h "+(m%60)+"m":m+"m"}
+function slip(e){
+  var d=document.createElement("div");d.className="slip";
+  d.innerHTML="<div style=\"min-width:0\"><div class=\"nm\">"+esc(e.name)+"</div><div class=\"sub\">"+fmt(e.size)+" &middot; <b>/f/"+esc(String(e.id).slice(0,6))+"</b> &middot; "+left(e.expires_at)+" left</div></div>";
+  var a=document.createElement("div");a.className="acts";
+  function B(t,h,fn){var x=document.createElement(fn?"button":"a");x.className="ib";x.title=t;x.innerHTML=ic(h);if(fn){x.type="button";x.onclick=fn}else{x.href=t==="open"?e.url:e.url+"?download=1";if(t==="open"){x.target="_blank";x.rel="noopener"}else x.setAttribute("download",e.name||"")}a.appendChild(x)}
+  B("open","out");B("download","down");
+  B("copy",null,function(){copy(e.url)});
+  B("forget","x",function(){wr(liveL(rd()).filter(function(z){return z.id!==e.id}));render()});
+  if(!a.children[2].innerHTML) a.children[2].innerHTML=ic("copy");
+  d.appendChild(a);return d;
+}
+function render(){var l=liveL(rd());wr(l);pn.hidden=!l.length;bx.innerHTML="";l.forEach(function(e){bx.appendChild(slip(e))})}
+document.getElementById("clear-links").onclick=function(){if(confirm("Forget every saved link in this browser? Files stay online until they expire.")){wr([]);render()}};
+pk.onchange=function(){enq(pk.files);pk.value=""};
+["dragenter","dragover"].forEach(function(n){tg.addEventListener(n,function(e){e.preventDefault();tg.classList.add("over")})});
+["dragleave","drop"].forEach(function(n){tg.addEventListener(n,function(e){e.preventDefault();tg.classList.remove("over");if(n==="drop"&&e.dataTransfer&&e.dataTransfer.files.length)enq(e.dataTransfer.files)})});
+document.addEventListener("paste",function(e){if(e.clipboardData&&e.clipboardData.files.length)enq(e.clipboardData.files)});
+["dragover","drop"].forEach(function(n){window.addEventListener(n,function(e){if(!tg.contains(e.target))e.preventDefault()})});
+function enq(l){for(var i=0;i<l.length;i++)wait.push(l[i]);pump()}
+function pump(){if(busy||!wait.length)return;busy=true;send(wait.shift(),function(){busy=false;pump()})}
+function send(file,done){
+  var c=document.createElement("div");c.className="slip";
+  c.innerHTML="<div style=\"min-width:0\"><div class=\"nm\">"+esc(file.name)+"</div><div class=\"sub\"><span class=\"meter\"><i></i></span> <span class=\"st\">queued</span></div></div>";
+  q.insertBefore(c,q.firstChild);var st=c.querySelector(".st"),fl=c.querySelector(".meter i");
+  function fail(m){st.textContent="failed";st.style.color="var(--bad)";var p=document.createElement("div");p.className="err";p.textContent=m;c.appendChild(p)}
+  if(file.size>MAX){fail("Over the 100 MB limit. This one is "+fmt(file.size)+".");return done()}
+  st.textContent="0%";
+  var x=new XMLHttpRequest();x.open("PUT","https://cdn.nullstacks.workers.dev/public/upload?filename="+encodeURIComponent(file.name));
+  x.setRequestHeader("Content-Type",file.type||"application/octet-stream");
+  x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded/e.total*100);fl.style.width=p+"%";st.textContent=p+"%"}};
+  x.onload=function(){var d={};try{d=JSON.parse(x.responseText)}catch(z){}
+    if(x.status>=200&&x.status<300&&d.url){c.remove();var l=liveL(rd()).filter(function(z){return z.id!==d.id});
+      l.unshift({id:d.id,name:d.name,size:d.size,content_type:d.content_type,url:d.url,expires_at:d.expires_at});wr(l.slice(0,100));render();toast("Link ready")}
+    else fail(d.error&&d.error.message||"Upload failed. Try again.");done()};
+  x.onerror=function(){fail("Connection dropped before the upload finished.");done()};
+  x.send(file);
+}
+render();
+
+/* ---- login ---- */
+var f=document.getElementById("login"),ki=document.getElementById("key"),er=document.getElementById("login-err"),lb=document.getElementById("login-label"),bt=document.getElementById("login-btn");
+document.getElementById("reveal").onclick=function(){ki.type=ki.type==="password"?"text":"password"};
+f.onsubmit=function(ev){ev.preventDefault();var t=ki.value.trim();er.classList.remove("on");
+  if(!t){er.textContent="Enter your API key to continue.";er.classList.add("on");return}
+  bt.disabled=true;lb.textContent="Signing in…";
+  fetch("https://cdn.nullstacks.workers.dev/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",body:JSON.stringify({token:t})})
+    .then(function(r){return r.json().then(function(d){if(!r.ok)throw new Error(d.error&&d.error.message||"Login failed.");return d})})
+    .then(function(){location.href="https://cdn.nullstacks.workers.dev/dashboard"})
+    .catch(function(x){er.textContent=x.message;er.classList.add("on");bt.disabled=false;lb.textContent="Sign in"});
+};
+})();
+</script>
+</body>
+</html>

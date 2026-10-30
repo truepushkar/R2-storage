@@ -1137,13 +1137,18 @@ function htmlEscape(value) {
 function relativeTime(timestamp) {
   if (!timestamp) return "no expiry";
 
-  const diff = timestamp - Date.now();
+  const when = typeof timestamp === "number" ? timestamp : Date.parse(String(timestamp));
+  if (!Number.isFinite(when)) return "no expiry";
+
+  const diff = when - Date.now();
   if (diff <= 0) return "expired";
 
+  const minutes = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
-  if (hours < 1) return `expires in ${Math.max(1, Math.floor(diff / 60000))} minutes`;
-  if (hours < 48) return `expires in ${hours} hours`;
-  return `expires in ${Math.floor(hours / 24)} days`;
+
+  if (hours < 1) return `expires in ${Math.max(1, minutes)} min`;
+  if (hours < 48) return `expires in ${hours} h`;
+  return `expires in ${Math.floor(hours / 24)} d`;
 }
 
 function json(data, status = 200, extraHeaders = {}) {
@@ -1160,179 +1165,41 @@ function json(data, status = 200, extraHeaders = {}) {
 }
 
 /* ============================================================
-   SHARED HEAD / DESIGN TOKENS
+   SHARED SHELL
    ============================================================ */
 
-const FAVICON = `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23070b12'/%3E%3Cpath d='M9 21a5 5 0 0 1 .9-9.9A6.5 6.5 0 0 1 22.5 13 4.5 4.5 0 0 1 22 21.5H9z' fill='none' stroke='%23f38020' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">`;
+const FAVICON =
+  '<link rel="icon" href="data:image/svg+xml,' +
+  '%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E' +
+  '%3Crect width=%2732%27 height=%2732%27 fill=%27%230a0b0c%27/%3E' +
+  '%3Ccircle cx=%2716%27 cy=%2716%27 r=%276.5%27 fill=%27none%27 stroke=%27%23ffb000%27 stroke-width=%272%27/%3E' +
+  '%3Cpath d=%27M16 4v5M16 23v5M4 16h5M23 16h5%27 stroke=%27%23ffb000%27 stroke-width=%272%27 stroke-linecap=%27round%27/%3E' +
+  '%3C/svg%3E">';
 
-const TAILWIND_CONFIG = `tailwind.config = {
-  darkMode: "class",
-  theme: {
-    extend: {
-      colors: {
-        "primary": "#f38020",
-        "primary-container": "#ea580c",
-        "primary-fixed": "#fdba74",
-        "primary-fixed-dim": "#fb923c",
-        "inverse-primary": "#c2410c",
-        "secondary": "#38bdf8",
-        "tertiary": "#38bdf8",
-        "tertiary-fixed": "#7dd3fc",
-        "background": "#070b12",
-        "surface": "#070b12",
-        "surface-deep": "#070b12",
-        "surface-base": "#0a0f1d",
-        "surface-card": "#0d1527",
-        "surface-raised": "#131e33",
-        "surface-container": "#0f172a",
-        "surface-container-high": "#17233c",
-        "surface-variant": "#1e293b",
-        "border-subtle": "#152033",
-        "border-highlight": "#1e2d4a",
-        "outline": "#475569",
-        "text-primary": "#f8fafc",
-        "text-secondary": "#94a3b8",
-        "text-muted": "#64748b",
-        "on-surface": "#f1f5f9",
-        "on-surface-variant": "#94a3b8",
-        "on-primary": "#ffffff",
-        "error": "#ffb4ab",
-        "method-get": "#38bdf8",
-        "method-post": "#fbbf24",
-        "method-put": "#f38020",
-        "method-delete": "#f87171",
-        "accent-glow": "rgba(243, 128, 32, 0.16)"
-      },
-      borderRadius: { DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", full: "9999px" },
-      spacing: {
-        "space-2xs": "0.25rem",
-        "space-xs": "0.5rem",
-        "space-sm": "0.75rem",
-        "space-md": "1rem",
-        "space-lg": "1.5rem",
-        "space-xl": "2rem",
-        "space-2xl": "3rem",
-        "space-3xl": "4.5rem",
-        "space-4xl": "6rem",
-        "gutter-mobile": "1rem",
-        "gutter-desktop": "1.5rem",
-        "container-max": "1140px"
-      },
-      fontFamily: {
-        "display-hero": ["Outfit"],
-        "headline-lg": ["Outfit"],
-        "headline-md": ["Outfit"],
-        "headline-sm": ["Outfit"],
-        "body-lg": ["Outfit"],
-        "body-md": ["Outfit"],
-        "body-sm": ["Outfit"],
-        "caption": ["Outfit"],
-        "eyebrow": ["JetBrains Mono"],
-        "label-code-md": ["JetBrains Mono"],
-        "label-code-lg": ["JetBrains Mono"]
-      },
-      fontSize: {
-        "display-hero": ["56px", { lineHeight: "64px", letterSpacing: "-0.03em", fontWeight: "700" }],
-        "headline-lg": ["36px", { lineHeight: "44px", letterSpacing: "-0.02em", fontWeight: "600" }],
-        "headline-md": ["24px", { lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "600" }],
-        "headline-sm": ["18px", { lineHeight: "26px", letterSpacing: "-0.005em", fontWeight: "600" }],
-        "body-lg": ["16px", { lineHeight: "26px", fontWeight: "400" }],
-        "body-md": ["14px", { lineHeight: "22px", fontWeight: "400" }],
-        "body-sm": ["13px", { lineHeight: "18px", fontWeight: "400" }],
-        "caption": ["12px", { lineHeight: "16px", fontWeight: "400" }],
-        "eyebrow": ["11px", { lineHeight: "16px", letterSpacing: "0.12em", fontWeight: "600" }],
-        "label-code-md": ["12px", { lineHeight: "18px", fontWeight: "500" }],
-        "label-code-lg": ["14px", { lineHeight: "20px", letterSpacing: "-0.01em", fontWeight: "500" }]
-      }
-    }
-  }
-};`;
+const FONTS =
+  '<link rel="preconnect" href="https://fonts.googleapis.com">' +
+  '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
+  '<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">';
 
-const BASE_STYLE = `@layer base {
-  html, body { margin: 0; padding: 0; }
-  body { overscroll-behavior-y: none; }
-}
+const JK_STYLE = ":root{\n  --glass:#0a0b0c; --glass-2:#101113; --glass-3:#16181b;\n  --amber:#ffb000; --amber-dim:#c98a05; --amber-16:rgba(255,176,0,.16); --amber-30:rgba(255,176,0,.30); --amber-60:rgba(255,176,0,.60);\n  --ink:#eceded; --ink-2:#b9bcc0; --mute:#8b9096;\n  --hair:rgba(255,255,255,.09); --hair-2:rgba(255,255,255,.05);\n  --bad:#ff6b5e;\n  --f:\"Archivo\",\"Segoe UI\",system-ui,sans-serif;\n  --m:\"IBM Plex Mono\",ui-monospace,Menlo,Consolas,monospace;\n  color-scheme:dark;\n}\n*[hidden]{display:none!important}\n*{box-sizing:border-box}\nhtml{scroll-behavior:smooth;-webkit-text-size-adjust:100%}\nbody{margin:0;background:var(--glass);color:var(--ink);font:400 16px/1.6 var(--f);font-stretch:88%;-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;flex-direction:column}\n::selection{background:var(--amber);color:#0a0b0c}\n:focus-visible{outline:2px solid var(--amber);outline-offset:3px}\n*{scrollbar-width:thin;scrollbar-color:#3a3d42 transparent}\n::-webkit-scrollbar{width:10px;height:10px}\n::-webkit-scrollbar-thumb{background:#3a3d42;border:3px solid var(--glass)}\n::-webkit-scrollbar-thumb:hover{background:var(--amber-dim)}\na{color:inherit;text-decoration:none}\np{margin:0}\nimg{max-width:100%}\nh1,h2,h3{margin:0;font-weight:800;font-stretch:76%;letter-spacing:-.005em;line-height:1.02;text-wrap:balance}\n.skip{position:absolute;left:-9999px;top:6px;z-index:99;background:var(--amber);color:#0a0b0c;padding:8px 14px;font-weight:700;font-stretch:80%}\n.skip:focus{left:8px}\n.mono{font-family:var(--m);font-variant-numeric:tabular-nums;font-size:13px;letter-spacing:-.01em}\n.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}\n\n/* ---------- bar ---------- */\n.bar{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--glass) 92%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--hair)}\n.bar-in{max-width:1240px;margin:0 auto;padding:0 20px;height:58px;display:flex;align-items:center;gap:20px}\n.mark{display:flex;align-items:center;gap:11px;font-weight:800;font-stretch:74%;text-transform:uppercase;letter-spacing:.14em;font-size:13px;white-space:nowrap}\n.mark i{width:24px;height:24px;display:grid;place-items:center;background:var(--amber);color:#0a0b0c;border-radius:2px;flex:none}\n.bar nav{display:flex;gap:2px;margin-left:auto}\n.bar nav a{padding:7px 11px;font-size:12px;font-stretch:76%;text-transform:uppercase;letter-spacing:.12em;font-weight:700;color:var(--mute);border-radius:2px;transition:color .15s,background .15s}\n.bar nav a:hover{color:var(--ink);background:var(--glass-2)}\n.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;height:38px;padding:0 16px;border:1px solid var(--hair);background:var(--glass-2);color:var(--ink);font:700 12px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;border-radius:2px;cursor:pointer;transition:background .15s,color .15s,border-color .15s,transform .12s;white-space:nowrap;text-decoration:none}\n.btn:hover{border-color:var(--amber-60);color:#fff}\n.btn:active{transform:translateY(1px)}\n.btn:disabled{opacity:.5;cursor:default}\n.btn.pri{background:var(--amber);border-color:var(--amber);color:#0a0b0c}\n.btn.pri:hover{background:#ffc23d;color:#0a0b0c}\n.btn.gh{background:transparent}\n.btn.sm{height:30px;padding:0 11px;font-size:10.5px}\n.btn.dng{background:rgba(255,107,94,.1);border-color:rgba(255,107,94,.35);color:var(--bad)}\n.btn.dng:hover{border-color:var(--bad);color:#fff}\n\n/* ---------- lanes ---------- */\nmain{flex:1}\n.sheet{max-width:1240px;margin:0 auto;padding:0 20px;min-width:0}\n.lane{display:grid;grid-template-columns:88px minmax(0,1fr)}\n.lane>*:first-child{border-right:1px solid var(--hair)}\n.gun{position:relative;padding:34px 14px 0 0;text-align:right;overflow:hidden}\n.gun b{display:block;font-family:var(--m);font-size:11px;font-weight:500;color:var(--mute);letter-spacing:.06em}\n.gun .tick{position:absolute;right:-4px;width:7px;height:1px;background:var(--amber-60)}\n.body{padding:34px 0 0 30px;min-width:0}\n.lane+.lane .gun,.lane+.lane .body{border-top:1px solid var(--hair)}\n.plate-wrap{padding:22px 0 0 30px;min-width:0}\n.sec-h{font-size:clamp(30px,3.6vw,48px);text-transform:uppercase;letter-spacing:-.01em;font-stretch:72%}\n.sec-p{color:var(--ink-2);max-width:58ch;margin-top:14px;font-size:16px;font-stretch:94%;line-height:1.6}\n.sec-p b{color:var(--ink);font-weight:600}\n.sec-p code{font-family:var(--m);font-size:.86em;color:var(--amber)}\n\n/* ---------- amber plate ---------- */\n.plate{position:relative;background:var(--amber);color:#0a0b0c;overflow:hidden}\n.plate-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-bottom:1px solid rgba(10,11,12,.22);font-stretch:74%;text-transform:uppercase;letter-spacing:.14em;font-size:11px;font-weight:800}\n.plate-head .r{display:flex;gap:18px;opacity:.72}\n.plate h1{font-size:clamp(50px,8.6vw,112px);line-height:.84;letter-spacing:-.015em;font-weight:800;font-stretch:70%;padding:26px 20px 0;text-transform:uppercase}\n.plate h1 span{display:block}\n.plate .lede{padding:20px 20px 0;max-width:44ch;font-size:16.5px;font-weight:500;color:#231a05;font-stretch:92%;line-height:1.45}\n\n/* ---------- drop field ---------- */\n.field{position:relative;margin:26px 20px 0;background:var(--glass);color:var(--ink);border:1px solid rgba(10,11,12,.35);box-shadow:inset 0 0 0 1px rgba(255,176,0,.12)}\n.field .head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 14px;border-bottom:1px solid var(--hair)}\n.field .head span{font-family:var(--m);font-size:11px;color:var(--mute);letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.drop{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:20px;padding:26px 20px;cursor:pointer;background:var(--glass)}\n.drop:hover,.drop.over{background:#0f1113}\n.drop input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}\n.drop .leds{display:grid;grid-template-columns:repeat(2,7px);gap:7px;justify-items:center}\n.drop .leds i{width:7px;height:7px;background:rgba(255,255,255,.14);border-radius:50%;transition:background .2s}\n.drop.over .leds i{background:var(--amber);box-shadow:0 0 10px var(--amber-60)}\n.drop .say{min-width:0}\n.drop .say b{display:block;font-stretch:74%;text-transform:uppercase;letter-spacing:.1em;font-size:17px;font-weight:800;color:#fff}\n.drop .say em{font-style:normal;color:var(--mute);font-size:14px;letter-spacing:0}\n.drop .go{font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:800;color:var(--amber);border:1px solid var(--amber-30);padding:9px 14px;border-radius:2px;white-space:nowrap}\n.facts{display:flex;flex-wrap:wrap;border-top:1px solid var(--hair);background:#0c0d0f}\n.facts span{flex:1 1 auto;padding:10px 14px;font-family:var(--m);font-size:11px;color:var(--mute);letter-spacing:.03em;border-right:1px solid var(--hair);white-space:nowrap}\n.facts span:last-child{border-right:0}\n.facts b{color:var(--amber);font-weight:500}\n.facts .lock{display:inline-flex;align-items:center;gap:5px}\n.facts .lock svg{width:10px;height:10px;flex:none}\n\n/* ---------- queue + links ---------- */\n.queue{display:grid}\n.q{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;padding:12px 14px;border-top:1px solid var(--hair-2);animation:rise .4s cubic-bezier(.16,1,.3,1) both}\n.q .nm{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.q .sub{font-family:var(--m);font-size:11px;color:var(--mute);margin-top:3px;display:flex;gap:10px;align-items:center}\n.q .meter{width:120px;height:2px;background:rgba(255,255,255,.1)}\n.q .meter i{display:block;height:100%;width:0;background:var(--amber);transition:width .25s}\n.q .err{grid-column:1/-1;color:var(--bad);font-size:13px;font-family:var(--m)}\n@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}\n.links-panel{border-top:1px solid var(--hair)}\n.links-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-bottom:1px solid var(--hair-2)}\n.links-head b{font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;font-size:11px}\n.links-head em{font-style:normal;color:var(--mute);font-family:var(--m);font-size:11px;margin-left:10px;text-transform:none;letter-spacing:0}\n.slip{display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:11px 14px;border-top:1px solid var(--hair-2);animation:rise .4s cubic-bezier(.16,1,.3,1) both}\n.slip:first-child{border-top:0}\n.slip .nm{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.slip .sub{font-family:var(--m);font-size:11px;color:var(--mute);margin-top:3px}\n.slip .sub b{color:var(--amber);font-weight:500}\n.acts{display:flex;gap:4px;flex:none}\n.ib{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--hair);background:transparent;color:var(--ink-2);border-radius:2px;cursor:pointer;transition:.15s;flex:none}\n.ib:hover{color:var(--amber);border-color:var(--amber-60)}\n.ib svg{width:15px;height:15px}\n\n/* ---------- fixed-term notice (public) ---------- */\n.term{margin-top:26px;border-top:1px solid var(--hair);border-bottom:1px solid var(--hair);background:rgba(255,176,0,.05);display:grid;grid-template-columns:88px minmax(0,1fr) auto;align-items:stretch}\n.term .t{font-family:var(--m);font-size:13px;font-weight:500;padding:14px;border-right:1px solid var(--hair);color:var(--amber);display:flex;align-items:center}\n.term .d{padding:14px 16px;font-family:var(--m);font-size:12px;color:var(--ink-2);line-height:1.5;display:flex;align-items:center}\n.term .d b{color:var(--amber);font-weight:500}\n.term .k{font-family:var(--m);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);padding:14px 16px;display:flex;align-items:center;gap:6px;border-left:1px solid var(--hair);white-space:nowrap}\n.term .k svg{width:11px;height:11px}\n\n/* ---------- footer / toast ---------- */\nfooter{border-top:1px solid var(--hair);margin-top:0}\n.foot{max-width:1240px;margin:0 auto;padding:20px;display:flex;flex-wrap:wrap;gap:14px 26px;align-items:center;font-family:var(--m);font-size:11px;color:var(--mute);letter-spacing:.02em}\n.foot a:hover{color:var(--amber)}\n.foot .sp{margin-left:auto}\n.toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,16px);opacity:0;pointer-events:none;background:var(--amber);color:#0a0b0c;padding:10px 16px;font:700 11px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;transition:.22s cubic-bezier(.16,1,.3,1);z-index:70;border-radius:2px;max-width:90vw}\n.toast.on{opacity:1;transform:translate(-50%,0)}\n.toast.bad{background:var(--bad);color:#fff}\n\n/* ---------- schedule ---------- */\n.sched{margin-top:26px;border-top:1px solid var(--hair)}\n.sr{position:relative;display:grid;grid-template-columns:88px minmax(0,1fr) 150px;align-items:center;gap:0;border-bottom:1px solid var(--hair);background:transparent;width:100%;text-align:left;padding:0;color:inherit;font:inherit;cursor:pointer;transition:background .15s;border-left:0;border-right:0;border-top:0}\n.sr:hover{background:var(--glass-2)}\n.sr .t{font-family:var(--m);font-size:13px;font-weight:500;padding:11px 14px;border-right:1px solid var(--hair);color:var(--ink);letter-spacing:.02em}\n.sr .r{padding:0 16px;position:relative;height:40px;display:flex;align-items:center;overflow:hidden}\n.sr .r svg{width:100%;height:20px;overflow:visible}\n.sr .r .rail-line{stroke:var(--amber-30);stroke-width:1}\n.sr .r .rail-mark{stroke:var(--amber);stroke-width:1.25;fill:none}\n.sr[aria-pressed=\"true\"]{background:var(--amber-16)}\n.sr[aria-pressed=\"true\"] .r .rail-line{stroke:var(--amber)}\n.sr[aria-pressed=\"true\"] .t{color:var(--amber)}\n.sr .d{font-family:var(--m);font-size:11px;color:var(--mute);padding:0 16px 0 0;text-align:right;letter-spacing:.02em;position:relative;z-index:1;background:var(--glass);height:100%;display:flex;align-items:center;justify-content:flex-end}\n.sr:hover .d{background:var(--glass-2)}\n.sr[aria-pressed=\"true\"] .d{background:#1d1a0f;color:var(--ink-2)}\n.readout{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 18px;padding:16px 0 0;font-family:var(--m);font-size:12px;color:var(--mute)}\n.readout b{color:var(--amber);font-weight:500}\n.readout .sep{width:1px;height:12px;background:var(--hair)}\n\n/* ---------- api ---------- */\n.api{margin-top:26px;border:1px solid var(--hair);background:var(--glass-2);min-width:0;overflow:hidden}\n.tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--hair);scrollbar-width:none}\n.tabs::-webkit-scrollbar{display:none}\n.tab{position:relative;display:inline-flex;align-items:center;gap:10px;padding:12px 16px;background:transparent;border:0;border-right:1px solid var(--hair);color:var(--mute);font:700 11px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.12em;cursor:pointer;white-space:nowrap;transition:.15s}\n.tab .verb{font-family:var(--m);font-size:10px;letter-spacing:0;padding:3px 5px;border:1px solid var(--hair);color:var(--ink-2)}\n.tab:hover{color:var(--ink);background:var(--glass-3)}\n.tab[aria-selected=\"true\"]{color:var(--amber);background:var(--glass)}\n.tab[aria-selected=\"true\"] .verb{border-color:var(--amber-60);color:var(--amber)}\n.tab[aria-selected=\"true\"]:after{content:\"\";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--amber)}\n.pane{padding:20px 18px;min-width:0}\n.req{display:grid;gap:16px;min-width:0}\n.req>*{min-width:0}\n.lbl{font-family:var(--m);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);margin-bottom:7px}\npre{margin:0;padding:15px 16px;background:var(--glass);border:1px solid var(--hair);overflow-x:auto;font:13px/1.65 var(--m);color:var(--ink-2);tab-size:2}\npre .c{color:#6f747a}\npre .s{color:#e8e9ea}\npre .a{color:var(--amber)}\npre .n{color:#c9a76b}\n\n/* ---------- patch / forms ---------- */\n.patch{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);margin-top:26px;border:1px solid var(--hair)}\n.patch .l{padding:24px 22px;border-right:1px solid var(--hair);background:var(--glass-2);min-width:0}\n.patch .r{padding:24px 22px;min-width:0}\n.patch h3{font-size:24px;text-transform:uppercase;font-stretch:72%;letter-spacing:.01em}\n.patch p{color:var(--ink-2);font-size:14px;margin-top:8px;max-width:38ch}\n.fld{margin-top:18px}\n.inp{display:flex;gap:8px}\ninput[type=password],input[type=text],input[type=search],select{width:100%;min-width:0;height:40px;padding:0 12px;background:var(--glass);border:1px solid var(--hair);color:var(--ink);font:13px var(--m);border-radius:2px}\ninput:focus,select:focus{outline:none;border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}\ninput::placeholder{color:#5d6268}\nselect{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--mute) 50%),linear-gradient(135deg,var(--mute) 50%,transparent 50%);background-position:calc(100% - 15px) 17px,calc(100% - 10px) 17px;background-size:5px 5px;background-repeat:no-repeat;padding-right:32px}\n.err{display:none;margin-top:12px;padding:9px 11px;border:1px solid rgba(255,107,94,.4);color:var(--bad);font:12px var(--m);background:rgba(255,107,94,.06)}\n.err.on{display:block}\n.cats{list-style:none;padding:0;margin:16px 0 0;border-top:1px solid var(--hair)}\n.cats li{display:grid;grid-template-columns:1fr auto;gap:12px;padding:9px 0;border-bottom:1px solid var(--hair-2);font-size:14px;color:var(--ink-2)}\n.cats li b{color:var(--ink);font-weight:600}\n.cats li span{font-family:var(--m);font-size:11px;color:var(--mute)}\n\n/* ---------- doc page ---------- */\n.doc{max-width:920px;margin:0 auto;padding:0 20px}\n.doc-h{padding:34px 0 0}\n.doc-h h1{font-size:clamp(32px,5vw,56px);text-transform:uppercase;letter-spacing:-.015em;font-stretch:72%}\n.doc-h p{margin-top:14px;color:var(--ink-2);max-width:62ch}\n.note{margin-top:22px;border:1px solid var(--amber-30);background:rgba(255,176,0,.05);padding:14px 16px;font-size:14px;color:var(--ink-2);display:flex;gap:12px;align-items:flex-start}\n.note svg{width:16px;height:16px;color:var(--amber);flex:none;margin-top:3px}\n.note code{font-family:var(--m);font-size:.88em;color:var(--amber)}\n.grp{margin-top:38px;font-family:var(--m);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);border-bottom:1px solid var(--hair);padding-bottom:9px}\n.ep{margin-top:18px;border:1px solid var(--hair);background:var(--glass-2)}\n.ep-h{display:flex;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid var(--hair);flex-wrap:wrap}\n.ep-h .v{font-family:var(--m);font-size:10px;font-weight:500;letter-spacing:.06em;padding:3px 6px;border:1px solid var(--hair);color:var(--ink-2);flex:none}\n.ep-h .v.put,.ep-h .v.post{border-color:var(--amber-60);color:var(--amber)}\n.ep-h .v.get{border-color:rgba(56,189,248,.5);color:#7dd3fc}\n.ep-h .v.del{border-color:rgba(255,107,94,.5);color:var(--bad)}\n.ep-h .p{font-family:var(--m);font-size:13px;color:#fff;font-weight:500}\n.ep-h .tag{margin-left:auto;font-family:var(--m);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}\n.ep-b{padding:16px}\n.ep-b p{color:var(--ink-2);font-size:14px;margin:0 0 14px}\n.ep-b p:last-child{margin-bottom:0}\n.ep-b code{font-family:var(--m);font-size:.88em;color:var(--amber);background:rgba(255,176,0,.08);padding:1px 5px;border-radius:2px}\n.ep-b .lbl:not(:first-child){margin-top:14px}\ntable.exp{width:100%;border-collapse:collapse;margin-top:16px;border:1px solid var(--hair);background:var(--glass-2);font-size:14px}\ntable.exp th{text-align:left;padding:9px 14px;font-family:var(--m);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);border-bottom:1px solid var(--hair);font-weight:500}\ntable.exp td{padding:9px 14px;border-bottom:1px solid var(--hair-2);color:var(--ink-2)}\ntable.exp tr:last-child td{border-bottom:0}\ntable.exp td:first-child{font-family:var(--m);font-size:12.5px;color:var(--amber);width:110px}\ntable.exp td.fx{color:var(--ink);font-weight:600}\n\n/* ---------- dashboard ---------- */\n.dash{max-width:1240px;margin:0 auto;padding:22px 20px 0}\n.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--hair);background:var(--glass-2)}\n.stat{padding:16px 18px;border-right:1px solid var(--hair);min-width:0}\n.stat:last-child{border-right:0}\n.stat .k{font-family:var(--m);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}\n.stat .v{font-family:var(--m);font-size:24px;font-weight:500;color:var(--ink);margin-top:6px;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.stat.am .v{color:var(--amber)}\n.up{margin-top:16px;border:1px solid var(--hair);background:var(--glass-2);padding:16px}\n.up .top{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px}\n.up .top .h{font-family:var(--m);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}\n.up .row{display:grid;grid-template-columns:minmax(0,1fr) 190px auto;gap:10px;align-items:center}\n.up input[type=file]{width:100%;min-width:0;font:12px var(--m);color:var(--ink-2);padding:8px 0}\n.up input[type=file]::file-selector-button{appearance:none;border:1px solid var(--hair);background:var(--glass);color:var(--ink);font:700 10.5px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.1em;padding:9px 12px;border-radius:2px;cursor:pointer;margin-right:12px}\n.up input[type=file]::file-selector-button:hover{border-color:var(--amber-60);color:var(--amber)}\n#progress{font-family:var(--m);font-size:11.5px;color:var(--mute);margin-top:10px;min-height:15px}\n.files{margin-top:16px;border:1px solid var(--hair);background:var(--glass-2)}\n.files-h{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--hair)}\n.files-h .t{font-family:var(--m);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2)}\n.files-h .t em{font-style:normal;color:var(--mute);margin-left:8px}\n.filters{display:grid;grid-template-columns:minmax(0,1fr) 170px 160px;gap:8px;padding:12px 16px;border-bottom:1px solid var(--hair)}\n.bulkbar{display:none;gap:12px;align-items:center;justify-content:space-between;padding:9px 16px;border-bottom:1px solid var(--hair);background:var(--amber-16)}\n.bulkbar.on{display:flex}\n.bulkbar .n{font-family:var(--m);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--amber)}\n.tablewrap{overflow-x:auto}\ntable.files-t{width:100%;min-width:920px;border-collapse:collapse}\ntable.files-t th{text-align:left;padding:10px 14px;font-family:var(--m);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);border-bottom:1px solid var(--hair);font-weight:500;white-space:nowrap}\ntable.files-t th.cb{width:38px;padding-left:16px}\ntable.files-t td{padding:10px 14px;border-bottom:1px solid var(--hair-2);vertical-align:middle;font-size:13.5px;color:var(--ink-2)}\ntable.files-t tr:last-child td{border-bottom:0}\ntable.files-t tr:hover td{background:rgba(255,255,255,.02)}\n.fn{display:flex;align-items:center;gap:11px;min-width:0}\n.fn .g{width:30px;height:30px;border:1px solid var(--hair);display:grid;place-items:center;color:var(--amber);flex:none;border-radius:2px}\n.fn .g svg{width:15px;height:15px}\n.fn .meta{min-width:0}\n.fn .n{font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:264px}\n.fn .ct{font-family:var(--m);font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}\n.badge{display:inline-block;margin-left:7px;font-family:var(--m);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#7dd3fc;border:1px solid rgba(56,189,248,.4);padding:1px 5px;border-radius:2px;vertical-align:1px}\n.pill{display:inline-block;font-family:var(--m);font-size:10.5px;letter-spacing:.04em;padding:2px 7px;border-radius:2px;border:1px solid var(--hair);color:var(--ink-2);white-space:nowrap}\n.pill.warn{border-color:rgba(255,176,0,.45);color:var(--amber)}\n.pill.never{border-color:rgba(125,211,252,.4);color:#7dd3fc}\n.pill.dead{border-color:rgba(255,107,94,.4);color:var(--bad)}\n.rowact{display:flex;gap:4px;flex-wrap:nowrap}\n.mini{height:26px;padding:0 9px;border:1px solid var(--hair);background:transparent;color:var(--ink-2);font:700 10px/1 var(--f);font-stretch:74%;text-transform:uppercase;letter-spacing:.08em;border-radius:2px;cursor:pointer;transition:.15s;white-space:nowrap}\n.mini:hover{border-color:var(--amber-60);color:var(--amber)}\n.mini.dng:hover{border-color:var(--bad);color:var(--bad)}\n.empty{padding:52px 20px;text-align:center}\n.empty svg{width:26px;height:26px;color:var(--mute);margin-bottom:12px}\n.empty b{display:block;font-size:16px;color:var(--ink);font-weight:600}\n.empty p{color:var(--mute);font-size:13.5px;margin-top:5px}\ninput[type=checkbox]{width:15px;height:15px;accent-color:var(--amber);cursor:pointer;vertical-align:middle}\n\n/* ---------- modal ---------- */\n.modal{position:fixed;inset:0;z-index:90;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.72);backdrop-filter:blur(3px)}\n.modal.on{display:flex}\n.modal .card{width:100%;max-width:680px;max-height:86vh;overflow:auto;background:var(--glass-2);border:1px solid var(--amber-30);padding:20px;animation:rise .3s cubic-bezier(.16,1,.3,1) both}\n.modal .mh{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px}\n.modal .mh span{font-family:var(--m);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2)}\n.kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--hair)}\n.kv div{background:var(--glass);padding:11px 13px;min-width:0}\n.kv .k{font-family:var(--m);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}\n.kv .v{font-size:13px;color:var(--ink);margin-top:4px;word-break:break-all}\n.kv .wide{grid-column:1/-1}\n\n/* ---------- status page ---------- */\n.status{min-height:calc(100vh - 58px);display:grid;place-items:center;padding:40px 20px}\n.status .box{max-width:520px;width:100%}\n.status .code{font-family:var(--m);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--amber);margin-bottom:14px}\n.status h1{font-size:clamp(30px,5vw,46px);text-transform:uppercase;font-stretch:72%;letter-spacing:-.015em}\n.status p{margin-top:14px;color:var(--ink-2);max-width:46ch}\n.status .a{margin-top:26px}\n\n/* ---------- preview ---------- */\n.pv{max-width:960px;margin:0 auto;padding:22px 20px 0}\n.pv-card{border:1px solid var(--hair);background:var(--glass-2)}\n.pv-h{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:14px 16px;border-bottom:1px solid var(--hair)}\n.pv-h .g{width:34px;height:34px;border:1px solid var(--hair);display:grid;place-items:center;color:var(--amber);flex:none;border-radius:2px}\n.pv-h .g svg{width:16px;height:16px}\n.pv-h .meta{min-width:0;flex:1}\n.pv-h .n{font-weight:700;font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.pv-h .s{font-family:var(--m);font-size:10.5px;color:var(--mute);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.pv-h .s b{color:var(--amber);font-weight:500}\n.pv-b{padding:20px;display:grid;place-items:center;min-height:220px;background:var(--glass)}\n.pv-b img,.pv-b video{max-width:100%;max-height:70vh;display:block}\n.pv-b audio{width:100%;max-width:520px}\n.pv-b iframe{width:100%;height:72vh;border:0;background:var(--glass-2)}\n.pv-b pre{max-height:68vh;width:100%;overflow:auto;white-space:pre-wrap;word-break:break-word;border:0;background:transparent;padding:0}\n.pv-f{display:flex;gap:8px;padding:14px 16px;border-top:1px solid var(--hair)}\n.pv-f input{flex:1}\n.nopv{display:grid;place-items:center;gap:10px;text-align:center;color:var(--mute);font-size:14px;padding:30px 0}\n.nopv svg{width:24px;height:24px}\n\n/* ---------- responsive ---------- */\n@media (max-width:900px){\n  .patch{grid-template-columns:1fr}\n  .patch .l{border-right:0;border-bottom:1px solid var(--hair)}\n  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}\n  .stat:nth-child(2){border-right:0}\n  .stat:nth-child(1),.stat:nth-child(2){border-bottom:1px solid var(--hair)}\n  .up .row{grid-template-columns:1fr}\n  .filters{grid-template-columns:1fr}\n  .kv{grid-template-columns:1fr}\n}\n@media (max-width:760px){\n  .lane{grid-template-columns:44px minmax(0,1fr)}\n  .plate-wrap{padding:16px 0 0 16px}\n  .body{padding:26px 0 0 16px}\n  .plate h1{padding:20px 14px 0}\n  .plate .lede{padding:16px 14px 0;font-size:15px}\n  .field{margin:20px 14px 0}\n  .drop{grid-template-columns:1fr;gap:14px;padding:20px 14px}\n  .drop .go{justify-self:start}\n  .drop .leds{display:none}\n  .sr{grid-template-columns:60px minmax(0,1fr)}\n  .sr .d{display:none}\n  .term{grid-template-columns:1fr;border-left:0}\n  .term .t{border-right:0;border-bottom:1px solid var(--hair);font-size:15px;padding:10px 14px;justify-content:space-between}\n  .term .t:after{content:\"locked\";font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}\n  .term .k{display:none}\n  .term .d{padding:12px 14px;font-size:11.5px}\n  .bar nav{display:none}\n  .bar-in{gap:10px;height:54px;padding:0 14px}\n  .mark{font-size:11px;letter-spacing:.1em;gap:8px}\n  .mark i{width:21px;height:21px}\n  .btn.gh{display:none}\n  .bar .btn.pri{margin-left:auto;height:34px;padding:0 12px;font-size:10.5px;letter-spacing:.1em}\n  .facts span{flex:1 1 calc(50% - 1px);border-right:0;border-bottom:1px solid var(--hair);font-size:10.5px;padding:9px 12px}\n  .facts span:nth-child(odd){border-right:1px solid var(--hair)}\n  .plate-head{font-size:9.5px;letter-spacing:.1em;padding:11px 14px;gap:10px}\n  .plate-head .r{gap:10px}\n  pre{font-size:11.5px;line-height:1.7}\n  .readout{font-size:11px}\n  .sec-h{font-size:clamp(26px,8vw,34px)}\n  .sheet,.dash,.doc,.pv{padding-left:14px;padding-right:14px}\n  .doc-h h1{font-size:clamp(28px,8vw,38px)}\n  .pv-b iframe{height:56vh}\n}\n.lane>*, .plate-wrap>*, .patch>*, .term>*, .mod>.card{min-width:0}\n.modal .card{min-width:0}\n\n@media (prefers-reduced-motion:reduce){\n  *{animation:none!important;transition:none!important;scroll-behavior:auto}\n}";
 
-::selection { background: #f38020; color: #fff; }
+const HEAD = FONTS + FAVICON + "<style>" + JK_STYLE + "</style>";
 
-:focus-visible { outline: 2px solid #f38020; outline-offset: 2px; border-radius: 4px; }
+const SITE_HEADER =
+  '<header class="bar"><div class="bar-in">' +
+  '<a class="mark" href="/"><i>' +
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>' +
+  "</i>Content Delivery</a>" +
+  '<nav><a href="/#drop">Drop</a><a href="/#expiry">Expiry</a><a href="/docs">Docs</a><a href="/#patch">Sign in</a></nav>' +
+  '<a class="btn pri" href="/dashboard">Dashboard</a>' +
+  "</div></header>";
 
-.skip {
-  position: absolute;
-  left: -9999px;
-  top: 0;
-  z-index: 100;
-  padding: 10px 16px;
-  background: #f38020;
-  color: #fff;
-  font-weight: 600;
-  border-radius: 0 0 8px 0;
-}
-
-.skip:focus { left: 0; }
-
-.material-symbols-outlined {
-  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
-  user-select: none;
-}
-
-@keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.rise { animation: rise .35s cubic-bezier(.22,.8,.3,1) both; }
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: .01ms !important;
-    transition-duration: .01ms !important;
-  }
-}`;
-
-const HEAD_ASSETS = `<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap" rel="stylesheet">
-${FAVICON}
-<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
-<script>${TAILWIND_CONFIG}</script>
-<style>${BASE_STYLE}</style>`;
-
-const SITE_HEADER = `<header class="fixed top-0 left-0 right-0 z-50 bg-surface-deep/85 backdrop-blur-xl border-b border-border-subtle">
-  <div class="h-16 max-w-[1140px] mx-auto px-gutter-mobile lg:px-gutter-desktop flex items-center justify-between">
-    <a class="flex items-center gap-space-xs transition-opacity hover:opacity-90" href="/">
-      <div class="w-8 h-8 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center">
-        <span class="material-symbols-outlined text-primary text-[18px]">cloud_sync</span>
-      </div>
-      <span class="font-headline-sm text-headline-sm text-text-primary tracking-tight">Content Delivery</span>
-    </a>
-
-    <nav class="hidden md:flex items-center gap-space-xl">
-      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/#share">Share a file</a>
-      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/#features">Features</a>
-      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/#api">API</a>
-      <a class="font-body-md text-body-md text-on-surface-variant hover:text-on-surface transition-colors" href="/docs">Docs</a>
-    </nav>
-
-    <div class="flex items-center gap-space-md">
-      <a class="px-space-md py-space-xs rounded-lg bg-primary text-white font-headline-sm text-body-sm hover:bg-primary-container transition-all shadow-md shadow-primary/20" href="/dashboard">Dashboard</a>
-    </div>
-  </div>
-</header>`;
-
-const SITE_FOOTER = `<footer class="w-full bg-surface-base border-t border-border-subtle py-space-xl mt-space-3xl">
-  <div class="max-w-[1140px] mx-auto px-gutter-mobile lg:px-gutter-desktop flex flex-col sm:flex-row items-center justify-between gap-space-md text-center sm:text-left">
-    <div class="flex items-center gap-space-xs text-text-muted font-body-sm text-body-sm">
-      <span class="material-symbols-outlined text-[16px] text-primary">bolt</span>
-      <span>Content Delivery — Cloudflare Workers + R2</span>
-    </div>
-    <div class="flex items-center gap-space-lg">
-      <a class="font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors" href="/docs">Documentation</a>
-      <a class="font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors" href="/dashboard">Dashboard</a>
-    </div>
-  </div>
-</footer>`;
+const SITE_FOOTER =
+  '<footer><div class="foot">' +
+  "<span>Content Delivery &mdash; Cloudflare Workers + R2</span>" +
+  '<a href="/docs">API docs</a><a href="/dashboard">Dashboard</a>' +
+  '<span class="sp">v' + VERSION + '</span>' +
+  "</div></footer>";
 
 function htmlPage(body, status = 200) {
   return new Response(body, {
@@ -1345,716 +1212,487 @@ function htmlPage(body, status = 200) {
   });
 }
 
+
 /* ============================================================
-   PUBLIC WEBSITE
+   PUBLIC SITE
    ============================================================ */
 
 function publicPage() {
   return htmlPage(
-`<!DOCTYPE html>
-<html class="dark" lang="en">
+    `<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Content Delivery — share files from the edge</title>
-<meta name="description" content="Drop a file, get a link. A private storage API backed by Cloudflare R2 with expiring links, streaming uploads, and a public uploader.">
-${HEAD_ASSETS}
+<title>Content Delivery &mdash; send a file, get a link</title>
+<meta name="description" content="Drop a file, get a link. Files are stored on Cloudflare R2 and delete themselves after seven days.">
+${HEAD}
 </head>
-<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
-
+<body>
 <a class="skip" href="#main">Skip to content</a>
-
 ${SITE_HEADER}
+<main id="main">
+<div class="sheet">
 
-<main id="main" class="w-full pt-16 bg-surface-deep">
-<div class="relative w-full overflow-hidden">
+<div class="lane" id="drop">
+  <div class="gun"><b>01</b><span class="tick" style="top:44px"></span></div>
+  <div class="plate-wrap">
+    <div class="plate">
+      <div class="plate-head"><span>Public drop &middot; no key</span><span class="r"><span>R2 edge</span><span>7-day term</span></span></div>
+      <h1><span>Send a file.</span><span>Get a link.</span></h1>
+      <p class="lede">Anyone with the link can open it in a browser or pull the bytes down. Seven days later it is deleted, and nobody has to clean up.</p>
 
-<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[360px] bg-primary/15 blur-[130px] pointer-events-none rounded-full"></div>
-<div class="absolute top-96 -left-32 w-80 h-80 bg-tertiary/10 blur-[100px] pointer-events-none rounded-full"></div>
-
-<!-- SECTION 1: PUBLIC UPLOAD -->
-<section id="share" class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop pt-space-2xl pb-space-3xl relative">
-  <div class="flex flex-col items-start max-w-2xl mb-space-xl">
-    <div class="inline-flex items-center gap-space-xs px-space-sm py-1 rounded-full bg-surface-raised border border-border-subtle mb-space-sm">
-      <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-      <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-widest">Public upload</span>
-    </div>
-
-    <h1 class="font-display-hero text-headline-lg lg:text-display-hero text-text-primary tracking-tight mb-space-xs font-bold">
-      Drop a file, get a link
-    </h1>
-
-    <p class="font-body-lg text-body-lg text-text-secondary leading-relaxed">
-      No key needed for this one. Files land on Cloudflare R2 and get a link anyone can
-      open in the browser. Everything here deletes itself after seven days.
-    </p>
-  </div>
-
-  <div class="relative rounded-2xl bg-surface-card border border-border-subtle p-space-sm sm:p-space-lg shadow-2xl transition-all duration-300 hover:border-border-highlight group">
-    <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent"></div>
-
-    <div id="drop-target" tabindex="0" role="button" aria-label="Choose files to upload"
-      class="relative flex flex-col items-center justify-center p-space-xl sm:p-space-3xl rounded-xl border-2 border-dashed border-border-subtle bg-surface-deep/90 hover:border-primary/60 hover:bg-primary/5 transition-all duration-200 cursor-pointer text-center">
-
-      <input id="file-input" type="file" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" aria-label="Choose files">
-
-      <div class="w-14 h-14 rounded-2xl bg-surface-raised border border-border-highlight flex items-center justify-center mb-space-md group-hover:scale-105 transition-transform duration-200 shadow-inner">
-        <span class="material-symbols-outlined text-primary text-[28px]">upload_file</span>
-      </div>
-
-      <p class="font-headline-sm text-headline-sm text-text-primary mb-1">Drop files here</p>
-      <p class="font-body-md text-body-md text-text-secondary mb-space-lg">
-        or <span class="text-primary font-medium underline underline-offset-4 decoration-primary/40 group-hover:decoration-primary">browse</span> — you can paste from the clipboard too
-      </p>
-
-      <div class="flex flex-wrap items-center justify-center gap-y-2 gap-x-space-md text-text-muted font-body-sm text-body-sm pt-space-md border-t border-border-subtle/70 w-full max-w-lg">
-        <span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-text-muted/60"></span>Link expires in 7 days</span>
-        <span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-text-muted/60"></span>100 MB per file</span>
-        <span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-text-muted/60"></span>Anyone with the link can view or download</span>
-      </div>
-    </div>
-
-    <div id="queue" class="mt-space-sm space-y-space-xs" aria-live="polite"></div>
-
-    <div id="links-panel" class="hidden">
-      <div class="mt-space-lg pt-space-lg border-t border-border-subtle/80 flex flex-col md:flex-row md:items-center justify-between gap-space-md">
-        <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-space-sm">
-          <span class="font-headline-sm text-body-md font-semibold text-text-primary">Your links</span>
-          <span class="font-body-sm text-body-sm text-text-muted">Kept in this browser only. Expired ones disappear on their own.</span>
+      <div class="field">
+        <div class="head"><span>/public/upload</span><span>100 MB per file</span></div>
+        <div class="drop" id="drop-target">
+          <input id="file-input" type="file" multiple aria-label="Choose files">
+          <div class="leds" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <div class="say"><b>Drop files here</b><em>or paste from the clipboard &mdash; the link appears right here</em></div>
+          <span class="go">Choose files</span>
         </div>
-        <button id="clear-links-btn" type="button" class="self-start md:self-auto px-space-sm py-1 rounded text-body-sm font-body-sm text-text-muted hover:text-method-delete transition-colors flex items-center gap-1">
-          <span class="material-symbols-outlined text-[16px]">delete_sweep</span>
-          Clear all
-        </button>
+        <div class="facts">
+          <span class="lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="1.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><b>7 days</b> fixed</span>
+          <span><b>100 MB</b> per file</span>
+          <span><b>Any</b> file type</span>
+          <span><b>No</b> account needed</span>
+        </div>
+        <div id="queue" class="queue" aria-live="polite"></div>
+        <div id="links-panel" class="links-panel" hidden>
+          <div class="links-head"><div><b>Your links</b><em>kept in this browser only</em></div><button id="clear-links" class="btn sm" type="button">Clear all</button></div>
+          <div id="links"></div>
+        </div>
       </div>
-
-      <div id="links" class="mt-space-sm space-y-space-xs"></div>
     </div>
   </div>
-</section>
+</div>
 
-<!-- SECTION 2: PRIVATE STORAGE + LOGIN -->
-<section class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-2xl relative">
-  <div class="grid grid-cols-1 lg:grid-cols-12 gap-space-xl items-start">
+<div class="lane" id="expiry">
+  <div class="gun"><b>02</b><span class="tick" style="top:44px"></span></div>
+  <div class="body">
+    <h2 class="sec-h">Public drops have one term</h2>
+    <p class="sec-p">Every file uploaded through the public drop is deleted after <b>seven days</b>. It is not a setting and there is no control for it: the Worker assigns the term and sweeps whatever has passed. <b>The private API is where you choose.</b></p>
 
-    <div class="lg:col-span-7 flex flex-col items-start">
-      <div class="flex items-center gap-2 mb-space-sm">
-        <span class="h-[1px] w-5 bg-primary"></span>
-        <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Private R2 storage</span>
-      </div>
-
-      <h2 class="font-display-hero text-headline-lg lg:text-display-hero text-text-primary leading-[1.08] tracking-tight font-bold mb-space-md">
-        Upload once.<br>
-        <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary via-primary-fixed-dim to-tertiary">Deliver from the edge.</span>
-      </h2>
-
-      <p class="font-body-lg text-body-lg text-text-secondary max-w-xl mb-space-xl leading-relaxed">
-        A private file API backed by Cloudflare R2. Push any file, pick an expiration, and get
-        a URL back — stream it, share it, or manage everything from the dashboard.
-      </p>
-
-      <div class="flex flex-wrap items-center gap-space-sm mb-space-2xl">
-        <a class="px-space-lg py-space-sm rounded-lg bg-primary text-white font-headline-sm text-body-md hover:bg-primary-container transition-all inline-flex items-center gap-space-xs shadow-lg shadow-primary/20 hover:shadow-primary/30" href="#share">
-          <span>Share a file</span>
-          <span class="material-symbols-outlined text-[18px]">arrow_upward</span>
-        </a>
-        <a class="px-space-lg py-space-sm rounded-lg bg-surface-card border border-border-subtle text-text-primary font-headline-sm text-body-md hover:border-border-highlight hover:bg-surface-raised transition-all" href="/dashboard">Open dashboard</a>
-        <a class="px-space-md py-space-sm text-text-secondary hover:text-text-primary font-body-md text-body-md transition-colors flex items-center gap-1" href="/docs">
-          <span>API documentation</span>
-          <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
-        </a>
-      </div>
-
-      <div class="grid grid-cols-3 gap-space-md sm:gap-space-lg w-full max-w-lg pt-space-lg border-t border-border-subtle">
-        <div>
-          <div class="font-label-code-lg text-headline-md text-primary font-bold">PUT</div>
-          <div class="font-body-sm text-caption text-text-muted mt-0.5">single-call upload</div>
-        </div>
-        <div>
-          <div class="font-label-code-lg text-headline-md text-text-primary font-bold">1h – ∞</div>
-          <div class="font-body-sm text-caption text-text-muted mt-0.5">per-file expiration</div>
-        </div>
-        <div>
-          <div class="font-label-code-lg text-headline-md text-tertiary font-bold">206</div>
-          <div class="font-body-sm text-caption text-text-muted mt-0.5">range streaming</div>
-        </div>
-      </div>
+    <div class="term">
+      <div class="t">7d</div>
+      <div class="d">Fixed term for <b>/public/upload</b>. Nobody can extend it from the browser, and nothing is kept past it.</div>
+      <div class="k"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="1.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Locked</div>
     </div>
+  </div>
+</div>
 
-    <div class="lg:col-span-5 w-full">
-      <div class="rounded-2xl bg-surface-card border border-border-subtle p-space-lg lg:p-space-xl relative shadow-2xl">
-        <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent"></div>
+<div class="lane" id="private">
+  <div class="gun"><b>03</b><span class="tick" style="top:44px"></span></div>
+  <div class="body">
+    <h2 class="sec-h">With a key, you pick the lifetime</h2>
+    <p class="sec-p">The private API takes any of these at upload. A scheduled sweep clears what has expired, and a download past its date deletes the object on the spot.</p>
+    <div class="sched" id="sched" role="group" aria-label="Lifetimes available to the private API"></div>
+    <div class="readout"><span>Upload now &rarr; deletes <b id="ro-date">&mdash;</b></span><span class="sep"></span><span id="ro-note">&nbsp;</span></div>
+  </div>
+</div>
 
-        <div class="flex items-center gap-space-sm mb-space-sm">
-          <div class="w-9 h-9 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary">
-            <span class="material-symbols-outlined text-[20px]">lock</span>
-          </div>
-          <div>
-            <h3 class="font-headline-md text-headline-sm text-text-primary font-semibold">Dashboard login</h3>
-            <p class="font-body-sm text-caption text-text-muted">Authenticate with your API key</p>
-          </div>
-        </div>
+<div class="lane" id="api">
+  <div class="gun"><b>04</b><span class="tick" style="top:44px"></span></div>
+  <div class="body">
+    <h2 class="sec-h">One HTTP call, no client library</h2>
+    <p class="sec-p">The dashboard is a convenience. Every action in it is a plain request you can send from a terminal, a script, or anything that speaks HTTP. Range requests work, so video seeks and downloads resume.</p>
+    <div class="api">
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div class="pane" id="pane"></div>
+    </div>
+  </div>
+</div>
 
-        <form id="login-form" class="mt-space-lg space-y-space-md" novalidate>
-          <div class="space-y-space-xs">
-            <label class="block font-label-code-md text-caption text-text-secondary uppercase tracking-wider" for="api-key-input">API key</label>
-            <div class="relative">
-              <input id="api-key-input" type="password" autocomplete="current-password" placeholder="Paste your API key"
-                class="w-full h-11 px-space-md pr-10 rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-label-code-md text-body-sm placeholder:text-text-muted focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
-              <button id="reveal-key" type="button" aria-label="Show or hide the key"
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors">
-                <span class="material-symbols-outlined text-[18px]">visibility</span>
+<div class="lane" id="patch">
+  <div class="gun"><b>05</b><span class="tick" style="top:44px"></span></div>
+  <div class="body">
+    <h2 class="sec-h">Owner sign-in</h2>
+    <p class="sec-p">Your API key opens the dashboard and every private endpoint. It is the only credential in the system.</p>
+    <div class="patch">
+      <div class="l">
+        <h3 style="font-size:18px">Patch in</h3>
+        <p>Paste the key you set with <span class="mono" style="color:var(--amber)">wrangler secret put API_KEY</span>.</p>
+        <form id="login" novalidate style="margin-top:2px" action="/auth/login" method="post">
+          <div class="fld">
+            <label class="lbl" for="key">API key</label>
+            <div class="inp">
+              <input id="key" type="password" autocomplete="current-password" placeholder="paste key">
+              <button id="reveal" class="ib" type="button" aria-label="Show key" style="height:40px;width:40px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
               </button>
             </div>
           </div>
-
-          <div id="login-error" class="hidden rounded-lg border border-method-delete/40 bg-method-delete/10 px-space-md py-space-xs font-body-sm text-body-sm text-method-delete" role="alert"></div>
-
-          <button id="login-button" type="submit"
-            class="w-full h-11 rounded-lg bg-primary text-white font-headline-sm text-body-md font-semibold hover:bg-primary-container transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/20 disabled:opacity-60">
-            <span id="login-label">Sign in</span>
-            <span class="material-symbols-outlined text-[18px]">login</span>
-          </button>
+          <div class="err" id="login-err" role="alert"></div>
+          <button class="btn pri" type="submit" style="width:100%;margin-top:14px;height:40px" id="login-btn"><span id="login-label">Sign in</span></button>
         </form>
-
-        <div class="mt-space-md pt-space-md border-t border-border-subtle flex items-center justify-between text-caption text-text-muted font-label-code-md">
-          <span class="flex items-center gap-1.5">
-            <span class="w-1.5 h-1.5 rounded-full bg-method-put"></span>
-            CF Workers R2 · TLS 1.3
-          </span>
-          <a class="text-text-secondary hover:text-primary transition-colors" href="/docs">Read the docs</a>
-        </div>
       </div>
-    </div>
-
-  </div>
-</section>
-
-<!-- SECTION 3: FEATURES -->
-<section id="features" class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-3xl relative">
-  <div class="flex flex-col items-start max-w-2xl mb-space-2xl">
-    <div class="flex items-center gap-2 mb-space-xs">
-      <span class="h-[1px] w-5 bg-primary"></span>
-      <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Features</span>
-    </div>
-    <h2 class="font-headline-lg text-headline-lg text-text-primary font-semibold tracking-tight mb-space-xs">
-      Storage built around the API, not the other way round
-    </h2>
-    <p class="font-body-lg text-body-md sm:text-body-lg text-text-secondary leading-relaxed">
-      Private by default. The Worker holds the only key, R2 holds the bytes, and every
-      operation is one HTTP call.
-    </p>
-  </div>
-
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-space-md">
-
-    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
-      <div>
-        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
-          <span class="material-symbols-outlined text-[20px]">air</span>
-        </div>
-        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Streaming end to end</h3>
-        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
-          Request bodies pipe straight into R2 with no buffering and no size cap. Downloads
-          support HTTP range requests for seeking and resuming.
-        </p>
-      </div>
-      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-method-get">
-        <span>RFC 7233 · byte ranges</span>
-      </div>
-    </div>
-
-    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
-      <div>
-        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
-          <span class="material-symbols-outlined text-[20px]">schedule</span>
-        </div>
-        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Per-file expiration</h3>
-        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
-          One hour to ninety days, or never. A scheduled sweep removes expired objects
-          automatically.
-        </p>
-      </div>
-      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-primary">
-        <span>Cron-driven cleanup</span>
-      </div>
-    </div>
-
-    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
-      <div>
-        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
-          <span class="material-symbols-outlined text-[20px]">ios_share</span>
-        </div>
-        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Public sharing</h3>
-        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
-          The uploader above needs no key. Those files get a seven-day link under /f/ with a
-          browser preview page, and never mix with your private ones.
-        </p>
-      </div>
-      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-method-post">
-        <span>Read-gated by metadata</span>
-      </div>
-    </div>
-
-    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
-      <div>
-        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
-          <span class="material-symbols-outlined text-[20px]">manage_search</span>
-        </div>
-        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Search and sorting</h3>
-        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
-          Filter by filename or MIME type, sort by name, size, or upload time — all
-          server-side.
-        </p>
-      </div>
-      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-text-muted">
-        <span>Cursor pagination</span>
-      </div>
-    </div>
-
-    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
-      <div>
-        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
-          <span class="material-symbols-outlined text-[20px]">dataset</span>
-        </div>
-        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">Bulk management</h3>
-        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
-          Select any set of files and remove them in a single API call, up to a thousand at a
-          time.
-        </p>
-      </div>
-      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-method-delete">
-        <span>Batch delete · 1,000 max</span>
-      </div>
-    </div>
-
-    <div class="rounded-xl bg-surface-card border border-border-subtle p-space-lg flex flex-col justify-between hover:border-border-highlight hover:-translate-y-0.5 transition-all duration-200 group">
-      <div>
-        <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary mb-space-md group-hover:scale-105 transition-transform">
-          <span class="material-symbols-outlined text-[20px]">terminal</span>
-        </div>
-        <h3 class="font-headline-sm text-headline-sm text-text-primary mb-space-xs font-semibold">API-first</h3>
-        <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
-          The dashboard is a convenience, not a requirement. Every action maps to a documented
-          REST endpoint.
-        </p>
-      </div>
-      <div class="mt-space-lg pt-space-sm border-t border-border-subtle/60 flex items-center gap-2 text-caption font-label-code-md text-tertiary">
-        <span>Plain HTTP · no SDK</span>
-      </div>
-    </div>
-
-  </div>
-</section>
-
-<!-- SECTION 4: QUICK START -->
-<section id="api" class="max-w-[1140px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop pt-space-xl pb-space-3xl relative">
-  <div class="flex flex-col items-start max-w-2xl mb-space-xl">
-    <div class="flex items-center gap-2 mb-space-xs">
-      <span class="h-[1px] w-5 bg-primary"></span>
-      <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Quick start</span>
-    </div>
-    <h2 class="font-headline-lg text-headline-lg text-text-primary font-semibold tracking-tight mb-space-xs">
-      Simple requests, predictable responses
-    </h2>
-    <p class="font-body-lg text-body-md sm:text-body-lg text-text-secondary">
-      Talk to R2 over plain HTTP, without an SDK in the way.
-    </p>
-  </div>
-
-  <div class="rounded-2xl bg-surface-base border border-border-subtle overflow-hidden shadow-2xl">
-    <div class="flex items-center justify-between border-b border-border-subtle bg-surface-deep px-space-md py-space-xs overflow-x-auto">
-      <div class="flex items-center gap-space-xs">
-        <button type="button" data-tab="tab-upload" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors bg-surface-raised text-primary border border-border-highlight">
-          <span class="px-1.5 py-0.5 rounded bg-primary/20 text-primary font-bold text-[10px]">PUT</span>
-          <span>/api/upload</span>
-        </button>
-        <button type="button" data-tab="tab-public" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-raised border border-transparent">
-          <span class="px-1.5 py-0.5 rounded bg-primary/20 text-primary font-bold text-[10px]">PUT</span>
-          <span>/public/upload</span>
-        </button>
-        <button type="button" data-tab="tab-files" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-raised border border-transparent">
-          <span class="px-1.5 py-0.5 rounded bg-tertiary/20 text-tertiary font-bold text-[10px]">GET</span>
-          <span>/api/files</span>
-        </button>
-        <button type="button" data-tab="tab-file-id" class="api-tab px-space-md py-space-xs rounded-lg text-body-sm font-label-code-md flex items-center gap-space-xs transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-raised border border-transparent">
-          <span class="px-1.5 py-0.5 rounded bg-tertiary/20 text-tertiary font-bold text-[10px]">GET</span>
-          <span>/f/:id</span>
-        </button>
-      </div>
-
-      <button id="global-copy-btn" type="button" class="shrink-0 ml-space-md px-space-sm py-1 rounded bg-surface-raised border border-border-subtle text-text-secondary hover:text-primary transition-colors flex items-center gap-1.5 font-label-code-md text-caption">
-        <span class="material-symbols-outlined text-[15px]">content_copy</span>
-        <span>Copy</span>
-      </button>
-    </div>
-
-    <div class="tab-pane block p-space-lg space-y-space-md" id="tab-upload">
-      <div>
-        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Request</div>
-        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-primary">curl</span> -X PUT \\
-  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/upload?filename=photo.jpg&amp;expires=7d"</span> \\
-  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
-  -H <span class="text-tertiary">"Content-Type: image/jpeg"</span> \\
-  --data-binary <span class="text-text-secondary">"@photo.jpg"</span></code></pre>
-      </div>
-      <div>
-        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Response</div>
-        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code>{
-  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>,
-  <span class="text-tertiary">"status"</span>: <span class="text-primary-fixed-dim">"complete"</span>,
-  <span class="text-tertiary">"id"</span>: <span class="text-primary-fixed-dim">"a4e3c1…"</span>,
-  <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"photo.jpg"</span>,
-  <span class="text-tertiary">"download_url"</span>: <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/files/a4e3c1…"</span>
-}</code></pre>
-      </div>
-    </div>
-
-    <div class="tab-pane hidden p-space-lg space-y-space-md" id="tab-public">
-      <div>
-        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Request · no auth header</div>
-        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-primary">curl</span> -X PUT \\
-  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/public/upload?filename=notes.txt"</span> \\
-  -H <span class="text-tertiary">"Content-Type: text/plain"</span> \\
-  --data-binary <span class="text-text-secondary">"@notes.txt"</span></code></pre>
-      </div>
-      <div>
-        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Response</div>
-        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code>{
-  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>,
-  <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"notes.txt"</span>,
-  <span class="text-tertiary">"expires_at"</span>: <span class="text-primary-fixed-dim">"…"</span>,
-  <span class="text-tertiary">"url"</span>: <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/f/abc123…"</span>
-}</code></pre>
-      </div>
-    </div>
-
-    <div class="tab-pane hidden p-space-lg space-y-space-md" id="tab-files">
-      <div>
-        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Request · search and sort</div>
-        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-tertiary">curl</span> \\
-  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/files?search=photo&amp;sort=size&amp;order=desc"</span> \\
-  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span></code></pre>
-      </div>
-    </div>
-
-    <div class="tab-pane hidden p-space-lg space-y-space-md" id="tab-file-id">
-      <div>
-        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">Public file · preview or raw bytes</div>
-        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code><span class="text-text-secondary"># a browser gets the preview page</span>
-<span class="text-primary-fixed-dim">https://cdn.pushkarsingh4343.workers.dev/f/FILE_ID</span>
-
-<span class="text-text-secondary"># curl gets the bytes</span>
-<span class="text-tertiary">curl</span> <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/f/FILE_ID"</span> -o file</code></pre>
+      <div class="r">
+        <h3 style="font-size:18px;color:var(--ink-2)">Behind the key</h3>
+        <ul class="cats">
+          <li><b>Every file, searchable</b><span>name &middot; type &middot; size</span></li>
+          <li><b>Storage totals</b><span>bytes &middot; count &middot; expired</span></li>
+          <li><b>Bulk delete</b><span>1000 per call</span></li>
+          <li><b>Per-file metadata</b><span>etag &middot; expiry &middot; url</span></li>
+        </ul>
       </div>
     </div>
   </div>
-</section>
+</div>
 
 </div>
 </main>
-
 ${SITE_FOOTER}
+<div class="toast" id="toast" role="status"></div>
+<script>(function () {
+  var MAX_BYTES = 100 * 1024 * 1024;
+  var STORE = "cdn.links.v6";
 
-<script>
-/* ---------- API tabs ---------- */
+  var ICON = {
+    down: '<path d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="1"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/>',
+    x: '<path d="M6 6l12 12M18 6 6 18"/>',
+    out: '<path d="M14 4h6v6m0-6L10 14M18 14v5H5V5h5"/>'
+  };
 
-(function () {
-  var tabs = document.querySelectorAll(".api-tab");
-  var active = "bg-surface-raised text-primary border-border-highlight".split(" ");
-  var idle = "text-text-secondary border-transparent".split(" ");
+  function icon(name) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + ICON[name] + "</svg>";
+  }
 
-  tabs.forEach(function (tab) {
-    tab.addEventListener("click", function () {
-      document.querySelectorAll(".tab-pane").forEach(function (pane) {
-        pane.classList.add("hidden");
-        pane.classList.remove("block");
-      });
+  function esc(value) {
+    var node = document.createElement("div");
+    node.textContent = String(value == null ? "" : value);
+    return node.innerHTML;
+  }
 
-      var target = document.getElementById(tab.getAttribute("data-tab"));
-      if (target) {
-        target.classList.remove("hidden");
-        target.classList.add("block");
-      }
+  function fmtBytes(bytes) {
+    bytes = Number(bytes) || 0;
+    if (!bytes) return "0 B";
+    var units = ["B", "KB", "MB", "GB", "TB"];
+    var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
+  }
 
-      tabs.forEach(function (other) {
-        active.forEach(function (name) { other.classList.remove(name); });
-        idle.forEach(function (name) { other.classList.add(name); });
-      });
+  function toast(message, bad) {
+    var node = document.getElementById("toast");
+    node.textContent = message;
+    node.className = "toast on" + (bad ? " bad" : "");
+    clearTimeout(window.__toast);
+    window.__toast = setTimeout(function () { node.className = "toast"; }, 2600);
+  }
 
-      idle.forEach(function (name) { tab.classList.remove(name); });
-      active.forEach(function (name) { tab.classList.add(name); });
-    });
-  });
+  function copy(value) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(
+        function () { toast("Link copied"); },
+        function () { window.prompt("Copy this link", value); }
+      );
+    } else {
+      window.prompt("Copy this link", value);
+    }
+  }
 
-  document.getElementById("global-copy-btn").addEventListener("click", function () {
-    var pane = document.querySelector(".tab-pane.block");
-    if (!pane) return;
+  function left(iso) {
+    if (!iso) return "no expiry";
+    var diff = Date.parse(iso) - Date.now();
+    if (diff <= 0) return "expired";
+    var minutes = Math.floor(diff / 6e4);
+    var hours = Math.floor(minutes / 60);
+    var days = Math.floor(hours / 24);
+    if (days >= 2) return days + "d " + (hours % 24) + "h left";
+    if (hours >= 1) return hours + "h " + (minutes % 60) + "m left";
+    return minutes + "m left";
+  }
 
-    var button = this;
-    var original = button.innerHTML;
+  /* ---------- lifetime schedule: private API only ---------- */
 
-    navigator.clipboard.writeText(pane.innerText.trim()).then(function () {
-      button.innerHTML =
-        '<span class="material-symbols-outlined text-[15px] text-primary">check</span><span class="text-primary">Copied</span>';
-      setTimeout(function () { button.innerHTML = original; }, 1600);
-    });
-  });
-})();
+  var LIFETIMES = [
+    ["1h", 3600e3, "one working session"],
+    ["6h", 6 * 3600e3, "overnight"],
+    ["12h", 12 * 3600e3, "half a day"],
+    ["1d", 864e5, "a day"],
+    ["3d", 3 * 864e5, "a weekend"],
+    ["7d", 7 * 864e5, "a week"],
+    ["30d", 30 * 864e5, "a month"],
+    ["90d", 90 * 864e5, "a quarter"],
+    ["never", null, "until deleted"]
+  ];
 
-/* ---------- dashboard login ---------- */
+  var sched = document.getElementById("sched");
+  var readoutDate = document.getElementById("ro-date");
+  var readoutNote = document.getElementById("ro-note");
 
-(function () {
-  var form = document.getElementById("login-form");
-  var input = document.getElementById("api-key-input");
-  var error = document.getElementById("login-error");
-  var button = document.getElementById("login-button");
-  var label = document.getElementById("login-label");
+  function rail(ms, selected) {
+    var out = '<svg viewBox="-4 0 108 20" preserveAspectRatio="none" aria-hidden="true">';
+    out += '<line class="rail-line" x1="0" y1="10" x2="100" y2="10"/>';
 
-  document.getElementById("reveal-key").addEventListener("click", function () {
-    input.type = input.type === "password" ? "text" : "password";
-    this.querySelector("span").textContent =
-      input.type === "password" ? "visibility" : "visibility_off";
-  });
-
-  form.addEventListener("submit", function (event) {
-    event.preventDefault();
-
-    var token = input.value.trim();
-    error.classList.add("hidden");
-
-    if (!token) {
-      error.textContent = "Enter your API key to continue.";
-      error.classList.remove("hidden");
-      return;
+    if (ms === null) {
+      out += '<line class="rail-mark" x1="0" y1="10" x2="100" y2="10"/>';
+      out += '<circle class="rail-mark" cx="100" cy="10" r="3.4"/>';
+      return out + "</svg>";
     }
 
-    button.disabled = true;
-    label.textContent = "Signing in…";
+    var ratio = Math.log(ms / 3600e3) / Math.log(2160);
+    var width = Math.max(6, Math.min(100, ratio * 100));
 
-    fetch("/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ token: token }),
-    })
-      .then(function (response) {
-        return response.json().then(function (data) {
-          if (!response.ok) throw new Error((data.error && data.error.message) || "Login failed.");
-          return data;
+    out += '<line class="rail-mark" x1="0" y1="4" x2="0" y2="16"/>';
+    out += '<line class="rail-mark" x1="0" y1="10" x2="' + width + '" y2="10"/>';
+
+    if (selected) {
+      out += '<line class="rail-mark" x1="0" y1="7" x2="' + width + '" y2="7"/>';
+      out += '<line class="rail-mark" x1="0" y1="13" x2="' + width + '" y2="13"/>';
+    }
+
+    out += '<line class="rail-mark" x1="' + width + '" y1="4" x2="' + width + '" y2="16"/>';
+    return out + "</svg>";
+  }
+
+  function readout(ms) {
+    if (ms === null) {
+      readoutDate.textContent = "never";
+      readoutNote.textContent = "stays until you delete it";
+      return;
+    }
+    readoutDate.textContent = new Date(Date.now() + ms).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    readoutNote.textContent = "swept by the next cron run";
+  }
+
+  if (sched) {
+    LIFETIMES.forEach(function (entry) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "sr";
+      button.setAttribute("aria-pressed", entry[0] === "7d" ? "true" : "false");
+      button.innerHTML =
+        '<span class="t">' + entry[0] + "</span>" +
+        '<span class="r">' + rail(entry[1], entry[0] === "7d") + "</span>" +
+        '<span class="d">' + entry[2] + "</span>";
+      button.addEventListener("click", function () {
+        Array.prototype.forEach.call(sched.children, function (child) {
+          child.setAttribute("aria-pressed", "false");
         });
-      })
-      .then(function () {
-        location.href = "/dashboard";
-      })
-      .catch(function (err) {
-        error.textContent = err.message;
-        error.classList.remove("hidden");
-        button.disabled = false;
-        label.textContent = "Sign in";
+        button.setAttribute("aria-pressed", "true");
+        readout(entry[1]);
       });
-  });
-})();
+      sched.appendChild(button);
+    });
+    readout(7 * 864e5);
+  }
+  /* ---------- api tabs ---------- */
 
-/* ---------- public uploader ---------- */
+  var NL = String.fromCharCode(10);
 
-(function () {
-  var MAX_BYTES = 100 * 1024 * 1024;
-  var STORE = "cdn.links.v1";
+  function joinLines(lines) {
+    return lines.join(NL);
+  }
+
+  var TABS = [
+    {
+      verb: "PUT",
+      path: "/api/upload",
+      tag: "stream in",
+      request: joinLines([
+        "curl -X PUT \\"" + location.origin + "/api/upload?filename=clip.mp4&expires=7d\\" \\\\",
+        "  -H \\"authorization: Bearer $KEY\\" \\\\",
+        "  -H \\"content-type: video/mp4\\" \\\\",
+        "  --data-binary @clip.mp4"
+      ]),
+      response: joinLines([
+        "{",
+        "  \\"id\\": \\"a4e3c1...\\",",
+        "  \\"name\\": \\"clip.mp4\\",",
+        "  \\"size\\": 184320000,",
+        "  \\"expires_at\\": \\"2026-11-06T14:43Z\\",",
+        "  \\"download_url\\": \\"/api/files/a4e3c1...\\"",
+        "}"
+      ])
+    },
+    {
+      verb: "PUT",
+      path: "/public/upload",
+      tag: "no key, fixed 7d",
+      request: joinLines([
+        "curl -X PUT \\"" + location.origin + "/public/upload?filename=notes.txt\\" \\\\",
+        "  -H \\"content-type: text/plain\\" \\\\",
+        "  --data-binary @notes.txt"
+      ]),
+      response: joinLines([
+        "{",
+        "  \\"id\\": \\"abc123...\\",",
+        "  \\"name\\": \\"notes.txt\\",",
+        "  \\"expires_at\\": \\"2026-11-06T14:43Z\\",",
+        "  \\"url\\": \\"" + location.origin + "/f/abc123...\\"",
+        "}"
+      ])
+    },
+    {
+      verb: "GET",
+      path: "/api/files",
+      tag: "list + search",
+      request: joinLines([
+        "curl \\"" + location.origin + "/api/files?search=clip&sort=size&order=desc\\" \\\\",
+        "  -H \\"authorization: Bearer $KEY\\""
+      ]),
+      response: joinLines([
+        "{",
+        "  \\"data\\": [ { \\"id\\": \\"a4e3c1...\\", \\"name\\": \\"clip.mp4\\", \\"size\\": 184320000 } ],",
+        "  \\"pagination\\": { \\"cursor\\": null, \\"has_more\\": false },",
+        "  \\"count\\": 1",
+        "}"
+      ])
+    },
+    {
+      verb: "GET",
+      path: "/api/files/:id",
+      tag: "range bytes",
+      request: joinLines([
+        "curl \\"" + location.origin + "/api/files/a4e3c1...\\" \\\\",
+        "  -H \\"range: bytes=0-1023\\" \\\\",
+        "  -H \\"authorization: Bearer $KEY\\""
+      ]),
+      response: joinLines([
+        "HTTP/1.1 206 Partial Content",
+        "content-range: bytes 0-1023/184320000",
+        "accept-ranges: bytes",
+        "content-type: video/mp4"
+      ])
+    },
+    {
+      verb: "DEL",
+      path: "/api/files",
+      tag: "bulk up to 1000",
+      request: joinLines([
+        "curl -X DELETE \\"" + location.origin + "/api/files\\" \\\\",
+        "  -H \\"authorization: Bearer $KEY\\" \\\\",
+        "  -H \\"content-type: application/json\\" \\\\",
+        "  --data @ids.json"
+      ]),
+      response: '{ "deleted": 2 }'
+    }
+  ];
+
+  var tabBar = document.getElementById("tabs");
+  var pane = document.getElementById("pane");
+
+  function paint(text) {
+    var out = "";
+    text.split(NL).forEach(function (line) {
+      var safe = esc(line);
+      if (/^curl|^HTTP/.test(line)) out += '<span class="a">' + safe + "</span>" + NL;
+      else if (/^\\s/.test(line)) out += '<span class="n">' + safe + "</span>" + NL;
+      else out += '<span class="s">' + safe + "</span>" + NL;
+    });
+    return out;
+  }
+
+  function selectTab(index) {
+    Array.prototype.forEach.call(tabBar.children, function (child, i) {
+      child.setAttribute("aria-selected", i === index ? "true" : "false");
+    });
+    var tab = TABS[index];
+    pane.innerHTML =
+      '<div class="req"><div><div class="lbl">Request &middot; ' + esc(tab.tag) + '</div><pre>' + paint(tab.request) + "</pre></div>" +
+      '<div><div class="lbl">Response</div><pre>' + paint(tab.response) + "</pre></div></div>";
+  }
+
+  if (tabBar) {
+    TABS.forEach(function (tab, index) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "tab";
+      button.setAttribute("role", "tab");
+      button.innerHTML = '<span class="verb">' + tab.verb + "</span>" + esc(tab.path);
+      button.addEventListener("click", function () { selectTab(index); });
+      tabBar.appendChild(button);
+    });
+    selectTab(0);
+  }
+
+  /* ---------- public uploader ---------- */
 
   var target = document.getElementById("drop-target");
   var picker = document.getElementById("file-input");
   var queue = document.getElementById("queue");
   var panel = document.getElementById("links-panel");
-  var box = document.getElementById("links");
-
+  var list = document.getElementById("links");
   var waiting = [];
   var busy = false;
 
-  var ROW =
-    "flex items-center justify-between gap-space-sm p-space-sm rounded-lg bg-surface-deep/90 border border-border-subtle text-body-sm rise";
-  var PILL =
-    "w-7 h-7 rounded bg-surface-raised border border-border-subtle flex items-center justify-center text-text-secondary hover:text-primary transition-colors shrink-0";
-
-  function esc(value) {
-    var div = document.createElement("div");
-    div.textContent = String(value == null ? "" : value);
-    return div.innerHTML;
-  }
-
-  function size(bytes) {
-    bytes = Number(bytes) || 0;
-    if (!bytes) return "0 B";
-    var units = ["B", "KB", "MB", "GB", "TB"];
-    var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + " " + units[i];
-  }
-
-  function glyph(type) {
-    type = String(type || "").toLowerCase();
-    if (type.indexOf("image/") === 0) return "image";
-    if (type.indexOf("video/") === 0) return "movie";
-    if (type.indexOf("audio/") === 0) return "graphic_eq";
-    if (type.indexOf("pdf") > -1) return "picture_as_pdf";
-    if (type.indexOf("zip") > -1 || type.indexOf("compressed") > -1) return "folder_zip";
-    if (type.indexOf("json") > -1 || type.indexOf("text/") === 0) return "terminal";
-    return "draft";
-  }
-
-  function remaining(iso) {
-    if (!iso) return "no expiry";
-    var diff = Date.parse(iso) - Date.now();
-    if (diff <= 0) return "expired";
-
-    var hours = Math.floor(diff / 3600000);
-    if (hours < 1) return "expires in " + Math.max(1, Math.floor(diff / 60000)) + "m";
-    if (hours < 48) return "expires in " + hours + "h";
-    return "expires in " + Math.floor(hours / 24) + "d";
-  }
-
   function read() {
     try {
-      var raw = localStorage.getItem(STORE);
-      var list = raw ? JSON.parse(raw) : [];
-      return Array.isArray(list) ? list : [];
+      var raw = JSON.parse(localStorage.getItem(STORE) || "[]");
+      return Array.isArray(raw) ? raw : [];
     } catch (error) {
       return [];
     }
   }
 
-  function write(list) {
-    try { localStorage.setItem(STORE, JSON.stringify(list)); } catch (error) {}
+  function write(entries) {
+    try { localStorage.setItem(STORE, JSON.stringify(entries)); } catch (error) {}
   }
 
-  function live(list) {
+  function living(entries) {
     var now = Date.now();
-    return list.filter(function (entry) {
-      if (!entry || !entry.id || !entry.url) return false;
-      if (!entry.expires_at) return true;
-      return Date.parse(entry.expires_at) > now;
+    return entries.filter(function (entry) {
+      return entry && entry.id && entry.url && (!entry.expires_at || Date.parse(entry.expires_at) > now);
     });
   }
 
-  function remember(entry) {
-    var list = live(read()).filter(function (item) { return item.id !== entry.id; });
-    list.unshift(entry);
-    if (list.length > 100) list.length = 100;
-    write(list);
-    render();
-  }
+  function slip(entry) {
+    var row = document.createElement("div");
+    row.className = "slip";
+    row.innerHTML =
+      '<div style="min-width:0"><div class="nm">' + esc(entry.name) + "</div>" +
+      '<div class="sub">' + fmtBytes(entry.size) + ' &middot; <b>/f/' + esc(String(entry.id).slice(0, 6)) + "</b> &middot; " + left(entry.expires_at) + "</div></div>";
 
-  function forget(id) {
-    write(live(read()).filter(function (item) { return item.id !== id; }));
-    render();
-  }
+    var acts = document.createElement("div");
+    acts.className = "acts";
 
-  function shortId(id) {
-    return String(id || "").slice(0, 6);
-  }
-
-  function row(entry) {
-    var card = document.createElement("div");
-    card.className = ROW;
-
-    card.innerHTML =
-      '<div class="flex items-center gap-space-sm min-w-0">' +
-        '<div class="w-8 h-8 rounded bg-surface-raised border border-border-highlight flex items-center justify-center shrink-0">' +
-          '<span class="material-symbols-outlined text-primary text-[18px]">' + glyph(entry.content_type) + '</span>' +
-        '</div>' +
-        '<div class="min-w-0">' +
-          '<p class="text-text-primary font-medium truncate">' + esc(entry.name) + '</p>' +
-          '<div class="flex items-center gap-space-xs font-label-code-md text-caption text-text-muted">' +
-            '<span>' + size(entry.size) + '</span><span>&bull;</span>' +
-            '<span class="text-primary font-normal">' + esc(remaining(entry.expires_at)) + '</span>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-
-    var right = document.createElement("div");
-    right.className = "flex items-center gap-space-xs shrink-0";
-
-    var open = document.createElement("a");
-    open.href = entry.url;
-    open.target = "_blank";
-    open.rel = "noopener";
-    open.title = "Open preview";
-    open.className =
-      "hidden sm:flex px-space-sm py-1 rounded bg-surface-raised border border-border-subtle font-label-code-md text-caption text-method-get hover:border-primary transition-colors items-center gap-1";
-    open.innerHTML =
-      '<span>/f/' + esc(shortId(entry.id)) + '</span><span class="material-symbols-outlined text-[14px]">open_in_new</span>';
-
-    var save = document.createElement("a");
-    save.href = entry.url + "?download=1";
-    save.setAttribute("download", entry.name || "");
-    save.title = "Download file";
-    save.className = PILL;
-    save.innerHTML = '<span class="material-symbols-outlined text-[16px]">download</span>';
-
-    var copy = document.createElement("button");
-    copy.type = "button";
-    copy.title = "Copy link";
-    copy.className = PILL;
-    copy.innerHTML = '<span class="material-symbols-outlined text-[16px]">content_copy</span>';
-    copy.addEventListener("click", function () {
-      var mark = function () {
-        copy.innerHTML = '<span class="material-symbols-outlined text-[16px] text-primary">check</span>';
-        setTimeout(function () {
-          copy.innerHTML = '<span class="material-symbols-outlined text-[16px]">content_copy</span>';
-        }, 1500);
-      };
-
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(entry.url).then(mark, mark);
+    function makeAction(title, glyph, handler) {
+      var node = document.createElement(handler ? "button" : "a");
+      node.className = "ib";
+      node.title = title;
+      node.innerHTML = icon(glyph);
+      if (handler) {
+        node.type = "button";
+        node.addEventListener("click", handler);
+      } else if (title === "Open") {
+        node.href = entry.url;
+        node.target = "_blank";
+        node.rel = "noopener";
       } else {
-        window.prompt("Copy this link", entry.url);
+        node.href = entry.url + "?download=1";
+        node.setAttribute("download", entry.name || "");
       }
+      acts.appendChild(node);
+    }
+
+    makeAction("Open", "out");
+    makeAction("Download", "down");
+    makeAction("Copy link", "copy", function () { copy(entry.url); });
+    makeAction("Forget", "x", function () {
+      write(living(read()).filter(function (item) { return item.id !== entry.id; }));
+      render();
     });
 
-    var remove = document.createElement("button");
-    remove.type = "button";
-    remove.title = "Forget this link";
-    remove.className = PILL + " hover:text-method-delete";
-    remove.innerHTML = '<span class="material-symbols-outlined text-[16px]">close</span>';
-    remove.addEventListener("click", function () { forget(entry.id); });
-
-    right.appendChild(open);
-    right.appendChild(save);
-    right.appendChild(copy);
-    right.appendChild(remove);
-    card.appendChild(right);
-
-    return card;
+    row.appendChild(acts);
+    return row;
   }
 
   function render() {
-    var list = live(read());
-    write(list);
-
-    if (!list.length) {
-      panel.classList.add("hidden");
-      box.innerHTML = "";
-      return;
-    }
-
-    panel.classList.remove("hidden");
-    box.innerHTML = "";
-    list.forEach(function (entry) { box.appendChild(row(entry)); });
+    var entries = living(read());
+    write(entries);
+    panel.hidden = !entries.length;
+    list.innerHTML = "";
+    entries.forEach(function (entry) { list.appendChild(slip(entry)); });
   }
 
-  document.getElementById("clear-links-btn").addEventListener("click", function () {
-    if (!confirm("Forget every saved link in this browser? The files stay online until they expire.")) return;
-    write([]);
-    render();
-  });
-
-  /* ---------- picking files ---------- */
-
-  target.addEventListener("keydown", function (event) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      picker.click();
-    }
-  });
+  var clearButton = document.getElementById("clear-links");
+  if (clearButton) {
+    clearButton.addEventListener("click", function () {
+      if (!confirm("Forget every saved link in this browser? The files stay online until they expire.")) return;
+      write([]);
+      render();
+    });
+  }
 
   picker.addEventListener("change", function () {
     enqueue(picker.files);
@@ -2064,27 +1702,22 @@ ${SITE_FOOTER}
   ["dragenter", "dragover"].forEach(function (name) {
     target.addEventListener(name, function (event) {
       event.preventDefault();
-      target.classList.add("border-primary", "bg-primary/5");
+      target.classList.add("over");
     });
   });
 
-  target.addEventListener("dragleave", function (event) {
-    if (!target.contains(event.relatedTarget)) {
-      target.classList.remove("border-primary", "bg-primary/5");
-    }
-  });
-
-  target.addEventListener("drop", function (event) {
-    event.preventDefault();
-    target.classList.remove("border-primary", "bg-primary/5");
-    if (event.dataTransfer && event.dataTransfer.files.length) {
-      enqueue(event.dataTransfer.files);
-    }
+  ["dragleave", "drop"].forEach(function (name) {
+    target.addEventListener(name, function (event) {
+      event.preventDefault();
+      target.classList.remove("over");
+      if (name === "drop" && event.dataTransfer && event.dataTransfer.files.length) {
+        enqueue(event.dataTransfer.files);
+      }
+    });
   });
 
   document.addEventListener("paste", function (event) {
-    if (!event.clipboardData || !event.clipboardData.files.length) return;
-    enqueue(event.clipboardData.files);
+    if (event.clipboardData && event.clipboardData.files.length) enqueue(event.clipboardData.files);
   });
 
   ["dragover", "drop"].forEach(function (name) {
@@ -2093,8 +1726,8 @@ ${SITE_FOOTER}
     });
   });
 
-  function enqueue(list) {
-    for (var i = 0; i < list.length; i++) waiting.push(list[i]);
+  function enqueue(files) {
+    for (var i = 0; i < files.length; i++) waiting.push(files[i]);
     pump();
   }
 
@@ -2108,49 +1741,29 @@ ${SITE_FOOTER}
   }
 
   function send(file, done) {
-    var card = document.createElement("div");
-    card.className = "p-space-sm rounded-lg bg-surface-deep/90 border border-border-subtle text-body-sm rise";
+    var row = document.createElement("div");
+    row.className = "q";
+    row.innerHTML =
+      '<div style="min-width:0"><div class="nm">' + esc(file.name) + "</div>" +
+      '<div class="sub"><span class="meter"><i></i></span><span class="st">queued</span></div></div>';
+    queue.insertBefore(row, queue.firstChild);
 
-    card.innerHTML =
-      '<div class="flex items-center justify-between gap-space-sm">' +
-        '<div class="flex items-center gap-space-sm min-w-0">' +
-          '<div class="w-8 h-8 rounded bg-surface-raised border border-border-highlight flex items-center justify-center shrink-0">' +
-            '<span class="material-symbols-outlined text-primary text-[18px]">' + glyph(file.type) + '</span>' +
-          '</div>' +
-          '<div class="min-w-0">' +
-            '<p class="text-text-primary font-medium truncate">' + esc(file.name) + '</p>' +
-            '<div class="font-label-code-md text-caption text-text-muted">' + size(file.size) + '</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="state font-label-code-md text-caption text-text-secondary shrink-0">waiting</div>' +
-      '</div>' +
-      '<div class="track mt-space-sm h-1 rounded-full bg-surface-raised overflow-hidden">' +
-        '<i class="fill block h-full w-0 bg-primary transition-all duration-200"></i>' +
-      '</div>';
-
-    queue.insertBefore(card, queue.firstChild);
-
-    var state = card.querySelector(".state");
-    var track = card.querySelector(".track");
-    var fill = card.querySelector(".fill");
+    var state = row.querySelector(".st");
+    var fill = row.querySelector(".meter i");
 
     function fail(message) {
-      card.classList.add("border-method-delete/40");
-      track.remove();
       state.textContent = "failed";
-      state.classList.remove("text-text-secondary");
-      state.classList.add("text-method-delete");
-
-      var note = document.createElement("p");
-      note.className = "mt-space-xs font-body-sm text-body-sm text-method-delete";
+      state.style.color = "var(--bad)";
+      fill.style.background = "var(--bad)";
+      var note = document.createElement("div");
+      note.className = "err";
       note.textContent = message;
-      card.appendChild(note);
+      row.appendChild(note);
     }
 
     if (file.size > MAX_BYTES) {
-      fail("Over the 100 MB limit — this one is " + size(file.size) + ".");
-      done();
-      return;
+      fail("Over the 100 MB limit. This one is " + fmtBytes(file.size) + ".");
+      return done();
     }
 
     state.textContent = "0%";
@@ -2159,383 +1772,455 @@ ${SITE_FOOTER}
     xhr.open("PUT", "/public/upload?filename=" + encodeURIComponent(file.name));
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
 
-    xhr.upload.onprogress = function (event) {
+    xhr.upload.addEventListener("progress", function (event) {
       if (!event.lengthComputable) return;
       var percent = Math.round((event.loaded / event.total) * 100);
       fill.style.width = percent + "%";
       state.textContent = percent + "%";
-    };
+    });
 
-    xhr.onload = function () {
+    xhr.addEventListener("load", function () {
       var data = {};
       try { data = JSON.parse(xhr.responseText); } catch (error) {}
 
       if (xhr.status >= 200 && xhr.status < 300 && data.url) {
-        card.parentNode.removeChild(card);
-        remember({
+        row.remove();
+        var entries = living(read()).filter(function (item) { return item.id !== data.id; });
+        entries.unshift({
           id: data.id,
           name: data.name,
           size: data.size,
           content_type: data.content_type,
           url: data.url,
-          expires_at: data.expires_at,
+          expires_at: data.expires_at
         });
+        write(entries.slice(0, 100));
+        render();
+        toast("Link ready");
       } else {
         fail((data.error && data.error.message) || "Upload failed. Try again.");
       }
-
       done();
-    };
+    });
 
-    xhr.onerror = function () {
+    xhr.addEventListener("error", function () {
       fail("Connection dropped before the upload finished.");
       done();
-    };
+    });
 
     xhr.send(file);
   }
 
   render();
-  setInterval(render, 60000);
+
+  /* ---------- sign in ---------- */
+
+  var form = document.getElementById("login");
+  var keyField = document.getElementById("key");
+  var errorBox = document.getElementById("login-err");
+  var label = document.getElementById("login-label");
+  var submit = document.getElementById("login-btn");
+
+  document.getElementById("reveal").addEventListener("click", function () {
+    keyField.type = keyField.type === "password" ? "text" : "password";
+  });
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var token = keyField.value.trim();
+    errorBox.classList.remove("on");
+
+    if (!token) {
+      errorBox.textContent = "Enter your API key to continue.";
+      errorBox.classList.add("on");
+      return;
+    }
+
+    submit.disabled = true;
+    label.textContent = "Signing in...";
+
+    fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ token: token })
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error((data.error && data.error.message) || "Login failed.");
+          return data;
+        });
+      })
+      .then(function () { location.href = "/dashboard"; })
+      .catch(function (error) {
+        errorBox.textContent = error.message;
+        errorBox.classList.add("on");
+        submit.disabled = false;
+        label.textContent = "Sign in";
+      });
+  });
 })();
 </script>
-
 </body>
 </html>`
   );
 }
+
 
 /* ============================================================
    DOCUMENTATION
    ============================================================ */
 
-function methodBadge(method) {
-  const tone = {
-    GET: "bg-tertiary/20 text-tertiary",
-    PUT: "bg-primary/20 text-primary",
-    POST: "bg-method-post/20 text-method-post",
-    DELETE: "bg-method-delete/20 text-method-delete",
-  }[method] || "bg-surface-raised text-text-secondary";
-
-  return `<span class="px-1.5 py-0.5 rounded ${tone} font-bold text-[10px] font-label-code-md">${method}</span>`;
-}
-
-function endpointCard({ method, path, tag = "", note = "", blocks = [] }) {
+function endpointBlock({ verb, path, tag, note, blocks = [] }) {
+  const helpers = "'";
   const body = blocks
     .map(
-      (block) => `<div>
-        <div class="font-eyebrow text-caption text-text-muted mb-2 uppercase tracking-wider">${block.label}</div>
-        <pre class="overflow-x-auto p-space-md rounded-lg bg-surface-deep border border-border-subtle font-label-code-lg text-body-sm text-text-primary leading-relaxed"><code>${block.code}</code></pre>
-      </div>`
+      (block) =>
+        '<div class="lbl">' + block.label + "</div><pre>" + block.code + "</pre>"
     )
-    .join("\n");
+    .join("");
 
-  return `<div class="rounded-xl bg-surface-card border border-border-subtle overflow-hidden mb-space-md">
-  <div class="flex items-center gap-space-sm px-space-lg py-space-sm border-b border-border-subtle bg-surface-base">
-    ${methodBadge(method)}
-    <span class="font-label-code-lg text-body-sm text-text-primary">${path}</span>
-    ${
-      tag
-        ? `<span class="ml-auto font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">${tag}</span>`
-        : ""
-    }
-  </div>
-  <div class="p-space-lg space-y-space-md">
-    ${
-      note
-        ? `<p class="font-body-md text-body-md text-text-secondary leading-relaxed">${note}</p>`
-        : ""
-    }
-    ${body}
-  </div>
-</div>`;
+  const toneClass = { PUT: "put", POST: "post", GET: "get", DELETE: "del" }[verb] || "";
+
+  return (
+    '<div class="ep"><div class="ep-h">' +
+    '<span class="v ' + toneClass + '">' + verb + "</span>" +
+    '<span class="p">' + path + "</span>" +
+    (tag ? '<span class="tag">' + tag + "</span>" : "") +
+    "</div>" +
+    '<div class="ep-b">' +
+    (note ? "<p>" + note + "</p>" : "") +
+    body +
+    "</div></div>"
+  );
 }
 
 function docsPage() {
-  const code = (value) =>
-    `<code class="px-1.5 py-0.5 rounded bg-surface-raised border border-border-subtle font-label-code-md text-caption text-primary">${value}</code>`;
+  const code = (value) => "<code>" + value + "</code>";
+
+  const publicSection =
+    endpointBlock({
+      verb: "PUT",
+      path: "/public/upload",
+      tag: "no auth",
+      note:
+        "Open upload with a " + code("100 MB") + " cap and a fixed seven-day term. " +
+        code("Content-Length") +
+        " is required. HTML and SVG are stored as " +
+        code("application/octet-stream") +
+        " and served as downloads rather than rendered. Send " +
+        code("POST") +
+        " with " +
+        code("multipart/form-data") +
+        " and a " +
+        code("file") +
+        " field if you prefer form uploads.",
+      blocks: [
+        {
+          label: "Request",
+          code:
+            '<span class="a">curl</span> -X PUT \\' +
+            '\n  <span class="s">"https://YOUR-WORKER/public/upload?filename=notes.txt"</span> \\' +
+            '\n  -H <span class="n">"content-type: text/plain"</span> \\' +
+            '\n  --data-binary <span class="n">"@notes.txt"</span>',
+        },
+        {
+          label: "Response",
+          code:
+            "{\n" +
+            '  <span class="s">"object"</span>: <span class="a">"file"</span>,\n' +
+            '  <span class="s">"id"</span>: <span class="a">"abc123..."</span>,\n' +
+            '  <span class="s">"expires_at"</span>: <span class="a">"..."</span>,\n' +
+            '  <span class="s">"url"</span>: <span class="a">"https://YOUR-WORKER/f/abc123..."</span>\n' +
+            "}",
+        },
+      ],
+    }) +
+    endpointBlock({
+      verb: "GET",
+      path: "/f/:id",
+      tag: "no auth",
+      note:
+        "Serves publicly uploaded files only; private objects return " +
+        code("404") +
+        " here. A browser gets a viewer page, anything that does not ask for " +
+        code("text/html") +
+        " gets the bytes. Add " +
+        code("?raw=1") +
+        " for bytes from a browser or " +
+        code("?download=1") +
+        " to force an attachment. " +
+        code("Range") +
+        " requests return " +
+        code("206") +
+        " and expired links return " +
+        code("410") +
+        ".",
+    });
+
+  const statusSection =
+    endpointBlock({
+      verb: "GET",
+      path: "/api/health",
+      blocks: [
+        {
+          label: "Response",
+          code:
+            "{\n" +
+            '  <span class="s">"object"</span>: <span class="a">"health"</span>,\n' +
+            '  <span class="s">"status"</span>: <span class="a">"ok"</span>,\n' +
+            '  <span class="s">"version"</span>: <span class="a">"' + VERSION + '"</span>,\n' +
+            '  <span class="s">"bucket"</span>: <span class="a">"' + BUCKET_NAME + '"</span>\n' +
+            "}",
+        },
+      ],
+    }) +
+    endpointBlock({
+      verb: "GET",
+      path: "/api/stats",
+      blocks: [
+        {
+          label: "Response",
+          code:
+            "{\n" +
+            '  <span class="s">"files"</span>: <span class="a">12</span>,\n' +
+            '  <span class="s">"public_files"</span>: <span class="a">3</span>,\n' +
+            '  <span class="s">"bytes"</span>: <span class="a">48192031</span>,\n' +
+            '  <span class="s">"formatted_bytes"</span>: <span class="a">"45.96 MB"</span>,\n' +
+            '  <span class="s">"expired"</span>: <span class="a">0</span>\n' +
+            "}",
+        },
+      ],
+    });
+
+  const uploadSection =
+    endpointBlock({
+      verb: "PUT",
+      path: "/api/upload",
+      note:
+        "Streaming upload. The body pipes straight into R2 with no size cap. This is the " +
+        "endpoint where you choose the lifetime.",
+      blocks: [
+        {
+          label: "Request",
+          code:
+            '<span class="a">curl</span> -X PUT \\' +
+            '\n  <span class="s">"https://YOUR-WORKER/api/upload?filename=video.mp4&amp;expires=7d"</span> \\' +
+            '\n  -H <span class="n">"authorization: Bearer YOUR_API_KEY"</span> \\' +
+            '\n  -H <span class="n">"content-type: video/mp4"</span> \\' +
+            '\n  --data-binary <span class="n">"@video.mp4"</span>',
+        },
+      ],
+    }) +
+    endpointBlock({
+      verb: "POST",
+      path: "/api/upload",
+      note: "Multipart form upload, for browser forms and " + code("curl -F") + ".",
+      blocks: [
+        {
+          label: "Request",
+          code:
+            '<span class="a">curl</span> -X POST \\' +
+            '\n  <span class="s">"https://YOUR-WORKER/api/upload?expires=30d"</span> \\' +
+            '\n  -H <span class="n">"authorization: Bearer YOUR_API_KEY"</span> \\' +
+            '\n  -F <span class="n">"file=@document.pdf"</span>',
+        },
+      ],
+    });
+
+  const fileSection =
+    endpointBlock({
+      verb: "GET",
+      path: "/api/files",
+      note:
+        "Query parameters: " +
+        code("limit") + ", " + code("cursor") + ", " + code("search") + ", " +
+        code("type") + ", " + code("sort") + " (uploaded | name | size), " +
+        code("order") + " (asc | desc).",
+      blocks: [
+        {
+          label: "Response",
+          code:
+            "{\n" +
+            '  <span class="s">"object"</span>: <span class="a">"list"</span>,\n' +
+            '  <span class="s">"data"</span>: [\n' +
+            "    {\n" +
+            '      <span class="s">"id"</span>: <span class="a">"abc123..."</span>,\n' +
+            '      <span class="s">"name"</span>: <span class="a">"photo.jpg"</span>,\n' +
+            '      <span class="s">"size"</span>: <span class="a">245821</span>,\n' +
+            '      <span class="s">"visibility"</span>: <span class="a">"private"</span>\n' +
+            "    }\n" +
+            "  ],\n" +
+            '  <span class="s">"count"</span>: <span class="a">1</span>\n' +
+            "}",
+        },
+      ],
+    }) +
+    endpointBlock({
+      verb: "GET",
+      path: "/api/files/:id",
+      note:
+        "Streams inline by default. Add " + code("?download=1") + " to force an attachment. " +
+        code("Range") + " requests return " + code("206") + " with a " + code("Content-Range") + " header.",
+    }) +
+    endpointBlock({
+      verb: "DELETE",
+      path: "/api/files/:id",
+      blocks: [
+        {
+          label: "Response",
+          code: '{ <span class="s">"object"</span>: <span class="a">"file"</span>, <span class="s">"deleted"</span>: <span class="a">true</span> }',
+        },
+      ],
+    }) +
+    endpointBlock({
+      verb: "DELETE",
+      path: "/api/files",
+      note: "Bulk delete, up to 1000 IDs per call.",
+      blocks: [
+        {
+          label: "Request",
+          code:
+            '<span class="a">curl</span> -X DELETE \\' +
+            '\n  <span class="s">"https://YOUR-WORKER/api/files"</span> \\' +
+            '\n  -H <span class="n">"authorization: Bearer YOUR_API_KEY"</span> \\' +
+            '\n  -H <span class="n">"content-type: application/json"</span> \\' +
+            '\n  --data <span class="n">@ids.json</span>',
+        },
+        {
+          label: "ids.json",
+          code: '{ <span class="s">"ids"</span>: [<span class="a">"abc123"</span>, <span class="a">"def456"</span>] }',
+        },
+      ],
+    });
+
+  const lifetimes = [
+    ["1h", "1 hour", ""],
+    ["6h", "6 hours", ""],
+    ["12h", "12 hours", ""],
+    ["1d", "1 day", ""],
+    ["3d", "3 days", ""],
+    ["7d", "7 days", "fixed for public uploads"],
+    ["30d", "30 days", ""],
+    ["90d", "90 days", ""],
+    ["never", "no expiration", ""],
+  ];
+
+  const table =
+    '<table class="exp"><thead><tr><th>Value</th><th>Lifetime</th><th></th></tr></thead><tbody>' +
+    lifetimes
+      .map(
+        (row) =>
+          "<tr><td>" + row[0] + "</td><td>" + row[1] + "</td><td>" +
+          (row[2] ? '<span class="pill warn">' + row[2] + "</span>" : "") +
+          "</td></tr>"
+      )
+      .join("") +
+    "</tbody></table>";
 
   return htmlPage(
-`<!DOCTYPE html>
-<html class="dark" lang="en">
+    `<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>API documentation — Content Delivery</title>
+<title>API documentation &mdash; Content Delivery</title>
 <meta name="description" content="REST API reference for Content Delivery: uploads, expiration, listing, downloads, stats, and deletion.">
-${HEAD_ASSETS}
+${HEAD}
 </head>
-<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
-
+<body>
 <a class="skip" href="#main">Skip to content</a>
-
 ${SITE_HEADER}
-
-<main id="main" class="w-full pt-16">
-<div class="relative overflow-hidden">
-<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[300px] bg-primary/10 blur-[130px] pointer-events-none rounded-full"></div>
-
-<div class="max-w-[900px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop pt-space-2xl pb-space-3xl relative">
-
-  <div class="flex items-center gap-2 mb-space-sm">
-    <span class="h-[1px] w-5 bg-primary"></span>
-    <span class="font-eyebrow text-eyebrow uppercase text-primary tracking-wider">Reference</span>
+<main id="main">
+<div class="doc">
+  <div class="doc-h">
+    <h1>API documentation</h1>
+    <p>An authenticated REST API over your Cloudflare R2 bucket, plus one open endpoint for public sharing. Streaming upload and download, per-file expiration, search, sorting and bulk deletion.</p>
+    <div class="note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+      <div>Everything under <code>/api/</code> needs <code>authorization: Bearer YOUR_API_KEY</code>. The Worker reads the key from its <code>API_KEY</code> secret. <code>/public/upload</code> and <code>/f/:id</code> are the only open routes.</div>
+    </div>
   </div>
 
-  <h1 class="font-display-hero text-headline-lg lg:text-display-hero text-text-primary font-bold tracking-tight mb-space-sm">
-    API documentation
-  </h1>
+  <div class="grp">Public &mdash; no key</div>
+  ${publicSection}
 
-  <p class="font-body-lg text-body-lg text-text-secondary max-w-2xl leading-relaxed mb-space-lg">
-    An authenticated REST API over your Cloudflare R2 bucket, plus one open endpoint for
-    public sharing. Files support streaming upload and download, per-file expiration,
-    search, sorting, and bulk deletion.
-  </p>
+  <div class="grp">Status</div>
+  ${statusSection}
 
-  <div class="flex gap-space-sm items-start rounded-xl border border-primary/30 bg-primary/5 p-space-md mb-space-2xl">
-    <span class="material-symbols-outlined text-primary text-[20px] shrink-0">key</span>
-    <p class="font-body-md text-body-md text-text-secondary leading-relaxed">
-      Everything under ${code("/api/")} needs ${code("Authorization: Bearer YOUR_API_KEY")}.
-      The Worker reads the key from its ${code("API_KEY")} environment variable.
-      ${code("/public/upload")} and ${code("/f/:id")} are the only open routes.
-    </p>
-  </div>
+  <div class="grp">Uploads</div>
+  ${uploadSection}
 
-  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mb-space-md">Public</h2>
+  <div class="grp">Files</div>
+  ${fileSection}
 
-  ${endpointCard({
-    method: "PUT",
-    path: "/public/upload",
-    tag: "no auth",
-    note: `Fixed 7-day expiry and a 100 MB cap. ${code(
-      "Content-Length"
-    )} is required. HTML and SVG uploads are stored as ${code(
-      "application/octet-stream"
-    )} and served as downloads rather than rendered. Send ${code(
-      "POST"
-    )} with ${code("multipart/form-data")} and a ${code(
-      "file"
-    )} field if you prefer form uploads.`,
-    blocks: [
-      {
-        label: "Request",
-        code: `<span class="text-primary">curl</span> -X PUT \\
-  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/public/upload?filename=notes.txt"</span> \\
-  -H <span class="text-tertiary">"Content-Type: text/plain"</span> \\
-  --data-binary <span class="text-text-secondary">"@notes.txt"</span>`,
-      },
-      {
-        label: "Response",
-        code: `{
-  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>,
-  <span class="text-tertiary">"id"</span>: <span class="text-primary-fixed-dim">"abc123…"</span>,
-  <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"notes.txt"</span>,
-  <span class="text-tertiary">"size"</span>: <span class="text-primary-fixed-dim">4821</span>,
-  <span class="text-tertiary">"expires_at"</span>: <span class="text-primary-fixed-dim">"…"</span>,
-  <span class="text-tertiary">"url"</span>: <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/f/abc123…"</span>
-}`,
-      },
-    ],
-  })}
-
-  ${endpointCard({
-    method: "GET",
-    path: "/f/:id",
-    tag: "no auth",
-    note: `Serves publicly uploaded files only — private objects return ${code(
-      "404"
-    )} here. A browser gets a viewer page with the file rendered inline and a download
-      button; anything that doesn't ask for ${code(
-        "text/html"
-      )}, such as curl, gets the bytes. Add ${code(
-      "?raw=1"
-    )} for the bytes from a browser, or ${code(
-      "?download=1"
-    )} to force an attachment. ${code("Range")} requests return ${code(
-      "206"
-    )} and expired links return ${code("410")}. Set the ${code(
-      "PUBLIC_UPLOADS"
-    )} variable to ${code("false")} to disable new public uploads.`,
-  })}
-
-  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Status</h2>
-
-  ${endpointCard({
-    method: "GET",
-    path: "/api/health",
-    blocks: [
-      {
-        label: "Response",
-        code: `{
-  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"health"</span>,
-  <span class="text-tertiary">"status"</span>: <span class="text-primary-fixed-dim">"ok"</span>,
-  <span class="text-tertiary">"version"</span>: <span class="text-primary-fixed-dim">"${VERSION}"</span>,
-  <span class="text-tertiary">"bucket"</span>: <span class="text-primary-fixed-dim">"${BUCKET_NAME}"</span>
-}`,
-      },
-    ],
-  })}
-
-  ${endpointCard({
-    method: "GET",
-    path: "/api/stats",
-    blocks: [
-      {
-        label: "Response",
-        code: `{
-  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"stats"</span>,
-  <span class="text-tertiary">"files"</span>: <span class="text-primary-fixed-dim">12</span>,
-  <span class="text-tertiary">"public_files"</span>: <span class="text-primary-fixed-dim">3</span>,
-  <span class="text-tertiary">"bytes"</span>: <span class="text-primary-fixed-dim">48192031</span>,
-  <span class="text-tertiary">"formatted_bytes"</span>: <span class="text-primary-fixed-dim">"45.96 MB"</span>,
-  <span class="text-tertiary">"expired"</span>: <span class="text-primary-fixed-dim">0</span>
-}`,
-      },
-    ],
-  })}
-
-  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Uploads</h2>
-
-  ${endpointCard({
-    method: "PUT",
-    path: "/api/upload",
-    note: "Streaming upload. The body pipes directly into R2 with no size cap.",
-    blocks: [
-      {
-        label: "Request",
-        code: `<span class="text-primary">curl</span> -X PUT \\
-  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/upload?filename=video.mp4&amp;expires=7d"</span> \\
-  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
-  -H <span class="text-tertiary">"Content-Type: video/mp4"</span> \\
-  --data-binary <span class="text-text-secondary">"@video.mp4"</span>`,
-      },
-    ],
-  })}
-
-  ${endpointCard({
-    method: "POST",
-    path: "/api/upload",
-    note: `Multipart form upload, for browser forms and ${code("curl -F")}.`,
-    blocks: [
-      {
-        label: "Request",
-        code: `<span class="text-primary">curl</span> -X POST \\
-  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/upload?expires=30d"</span> \\
-  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
-  -F <span class="text-text-secondary">"file=@document.pdf"</span>`,
-      },
-    ],
-  })}
-
-  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Files</h2>
-
-  ${endpointCard({
-    method: "GET",
-    path: "/api/files",
-    note: `Query parameters: ${code("limit")}, ${code("cursor")}, ${code(
-      "search"
-    )}, ${code("type")}, ${code("sort")} (uploaded | name | size), ${code(
-      "order"
-    )} (asc | desc).`,
-    blocks: [
-      {
-        label: "Response",
-        code: `{
-  <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"list"</span>,
-  <span class="text-tertiary">"data"</span>: [
-    {
-      <span class="text-tertiary">"id"</span>: <span class="text-primary-fixed-dim">"abc123…"</span>,
-      <span class="text-tertiary">"name"</span>: <span class="text-primary-fixed-dim">"photo.jpg"</span>,
-      <span class="text-tertiary">"size"</span>: <span class="text-primary-fixed-dim">245821</span>,
-      <span class="text-tertiary">"visibility"</span>: <span class="text-primary-fixed-dim">"private"</span>,
-      <span class="text-tertiary">"public_url"</span>: <span class="text-primary-fixed-dim">null</span>
-    }
-  ],
-  <span class="text-tertiary">"count"</span>: <span class="text-primary-fixed-dim">1</span>
-}`,
-      },
-    ],
-  })}
-
-  ${endpointCard({
-    method: "GET",
-    path: "/api/files/:id",
-    note: `Streams inline by default. Add ${code(
-      "?download=1"
-    )} to force an attachment. ${code("Range")} requests return ${code(
-      "206"
-    )} with a ${code("Content-Range")} header.`,
-  })}
-
-  ${endpointCard({
-    method: "DELETE",
-    path: "/api/files/:id",
-    blocks: [
-      {
-        label: "Response",
-        code: `{ <span class="text-tertiary">"object"</span>: <span class="text-primary-fixed-dim">"file"</span>, <span class="text-tertiary">"deleted"</span>: <span class="text-primary-fixed-dim">true</span> }`,
-      },
-    ],
-  })}
-
-  ${endpointCard({
-    method: "DELETE",
-    path: "/api/files",
-    note: "Bulk delete, up to 1000 IDs per call.",
-    blocks: [
-      {
-        label: "Request",
-        code: `<span class="text-primary">curl</span> -X DELETE \\
-  <span class="text-primary-fixed-dim">"https://cdn.pushkarsingh4343.workers.dev/api/files"</span> \\
-  -H <span class="text-method-post">"Authorization: Bearer YOUR_API_KEY"</span> \\
-  -H <span class="text-tertiary">"Content-Type: application/json"</span> \\
-  -d <span class="text-text-secondary">'{"ids":["abc123","def456"]}'</span>`,
-      },
-    ],
-  })}
-
-  <h2 class="font-headline-md text-headline-md text-text-primary font-semibold mt-space-2xl mb-space-md">Expiration values</h2>
-
-  <div class="rounded-xl bg-surface-card border border-border-subtle overflow-hidden">
-    <table class="w-full">
-      <thead>
-        <tr class="border-b border-border-subtle bg-surface-base">
-          <th class="text-left px-space-lg py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Value</th>
-          <th class="text-left px-space-lg py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Lifetime</th>
-        </tr>
-      </thead>
-      <tbody class="font-body-md text-body-md text-text-secondary">
-        ${[
-          ["1h", "1 hour"],
-          ["6h", "6 hours"],
-          ["12h", "12 hours"],
-          ["1d", "1 day"],
-          ["3d", "3 days"],
-          ["7d", "7 days — the default, and fixed for public uploads"],
-          ["30d", "30 days"],
-          ["90d", "90 days"],
-          ["never", "No expiration"],
-        ]
-          .map(
-            ([value, meaning]) => `<tr class="border-b border-border-subtle/60 last:border-0">
-          <td class="px-space-lg py-space-sm font-label-code-md text-body-sm text-primary">${value}</td>
-          <td class="px-space-lg py-space-sm">${meaning}</td>
-        </tr>`
-          )
-          .join("\n        ")}
-      </tbody>
-    </table>
-  </div>
-
-</div>
+  <div class="grp">Lifetime values</div>
+  <p class="sec-p" style="font-size:14px;margin-top:14px">Accepted by the private API at upload. Public uploads ignore this and always get seven days.</p>
+  ${table}
 </div>
 </main>
-
 ${SITE_FOOTER}
-
 </body>
 </html>`
   );
+}
+
+
+/* ============================================================
+   STATUS PAGES
+   ============================================================ */
+
+function statusPage({ status, code, title, message, tone }) {
+  const accent = tone === "warn" ? "var(--amber)" : "var(--bad)";
+
+  return htmlPage(
+    `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${title} &mdash; Content Delivery</title>
+${HEAD}
+</head>
+<body>
+${SITE_HEADER}
+<main id="main">
+<div class="status">
+  <div class="box">
+    <div class="code" style="color:${accent}">${code}</div>
+    <h1>${title}</h1>
+    <p>${message}</p>
+    <div class="a"><a class="btn pri" href="/">Back to Content Delivery</a></div>
+  </div>
+</div>
+</main>
+${SITE_FOOTER}
+</body>
+</html>`,
+    status
+  );
+}
+
+function notFoundPage() {
+  return statusPage({
+    status: 404,
+    code: "404",
+    title: "That page does not exist",
+    message:
+      "The link may be wrong, or the file may have been deleted. Head back and send a new one.",
+  });
+}
+
+function expiredPage() {
+  return statusPage({
+    status: 410,
+    code: "410",
+    title: "This link has expired",
+    message:
+      "Public files are kept for seven days and then deleted. Ask whoever sent it to upload the file again.",
+    tone: "warn",
+  });
 }
 
 /* ============================================================
@@ -2544,124 +2229,103 @@ ${SITE_FOOTER}
 
 function previewGlyph(type) {
   type = String(type || "").toLowerCase();
-  if (type.startsWith("image/")) return "image";
-  if (type.startsWith("video/")) return "movie";
-  if (type.startsWith("audio/")) return "graphic_eq";
-  if (type.includes("pdf")) return "picture_as_pdf";
-  if (type.includes("zip") || type.includes("compressed")) return "folder_zip";
-  if (type.includes("json") || type.startsWith("text/")) return "terminal";
-  return "draft";
+  if (type.startsWith("image/")) return "img";
+  if (type.startsWith("video/")) return "vid";
+  if (type.startsWith("audio/")) return "aud";
+  if (type.includes("pdf")) return "pdf";
+  if (type.includes("zip") || type.includes("compressed")) return "zip";
+  if (type.includes("json") || type.startsWith("text/")) return "txt";
+  return "bin";
+}
+
+const GLYPHS = {
+  img: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5-5-6 6"/>',
+  vid: '<rect x="3" y="5" width="13" height="14" rx="1.5"/><path d="M16 10l5-3v10l-5-3z"/>',
+  aud: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+  pdf: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  zip: '<path d="M4 6h16v14H4z"/><path d="M12 6v6M10 12h4M12 15v3"/>',
+  txt: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8 13h8M8 17h5"/>',
+  bin: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+};
+
+function glyphSvg(name) {
+  return (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    (GLYPHS[name] || GLYPHS.bin) +
+    "</svg>"
+  );
 }
 
 function previewPage(file) {
-  const raw = `${PUBLIC_PREFIX}${encodeURIComponent(file.id)}?raw=1`;
-  const download = `${PUBLIC_PREFIX}${encodeURIComponent(file.id)}?download=1`;
+  const raw = PUBLIC_PREFIX + encodeURIComponent(file.id) + "?raw=1";
+  const download = PUBLIC_PREFIX + encodeURIComponent(file.id) + "?download=1";
   const type = String(file.type || "").toLowerCase();
   const name = htmlEscape(file.name);
 
   let media;
 
   if (type.startsWith("image/")) {
-    media = `<img class="max-w-full max-h-[72vh] rounded-lg block" src="${raw}" alt="${name}">`;
+    media = '<img src="' + raw + '" alt="' + name + '">';
   } else if (type.startsWith("video/")) {
-    media = `<video class="max-w-full max-h-[72vh] rounded-lg block" src="${raw}" controls playsinline preload="metadata"></video>`;
+    media =
+      '<video src="' + raw + '" controls playsinline preload="metadata"></video>';
   } else if (type.startsWith("audio/")) {
-    media = `<audio class="w-full max-w-lg" src="${raw}" controls preload="metadata"></audio>`;
+    media = '<audio src="' + raw + '" controls preload="metadata"></audio>';
   } else if (type.includes("pdf")) {
-    media = `<iframe class="w-full h-[74vh] rounded-lg bg-surface-card border-0" src="${raw}" title="${name}"></iframe>`;
+    media = '<iframe src="' + raw + '" title="' + name + '"></iframe>';
   } else if (
     type.startsWith("text/") ||
     type.includes("json") ||
     type.includes("csv") ||
     type.includes("xml")
   ) {
-    media = `<pre id="text" class="w-full max-h-[70vh] overflow-auto m-0 font-label-code-lg text-body-sm text-text-secondary leading-relaxed whitespace-pre-wrap break-words">Loading…</pre>`;
+    media = '<pre id="text">Loading…</pre>';
   } else {
-    media = `<div class="flex flex-col items-center gap-space-sm py-space-2xl text-center">
-      <div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center text-text-muted">
-        <span class="material-symbols-outlined text-[24px]">visibility_off</span>
-      </div>
-      <p class="font-body-md text-body-md text-text-secondary">No preview for this file type. Download it to open.</p>
-    </div>`;
+    media =
+      '<div class="nopv">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><path d="M3 3l18 18"/></svg>' +
+      "<span>No preview for this file type. Download it to open.</span></div>";
   }
 
   return htmlPage(
-`<!DOCTYPE html>
-<html class="dark" lang="en">
+    `<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
-<title>${name} — Content Delivery</title>
-${HEAD_ASSETS}
+<title>${name} &mdash; Content Delivery</title>
+${HEAD}
 </head>
-<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
-
+<body>
 ${SITE_HEADER}
-
-<main class="w-full pt-16">
-<div class="relative overflow-hidden">
-<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[300px] bg-primary/10 blur-[130px] pointer-events-none rounded-full"></div>
-
-<div class="max-w-[960px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-2xl relative">
-
-  <div class="rounded-2xl bg-surface-card border border-border-subtle overflow-hidden shadow-2xl">
-    <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent"></div>
-
-    <div class="flex flex-wrap items-center gap-space-md px-space-lg py-space-md border-b border-border-subtle bg-surface-base">
-      <div class="w-10 h-10 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary shrink-0">
-        <span class="material-symbols-outlined text-[20px]">${previewGlyph(
-          file.type
-        )}</span>
+<main id="main">
+<div class="pv">
+  <div class="pv-card">
+    <div class="pv-h">
+      <div class="g">${glyphSvg(previewGlyph(file.type))}</div>
+      <div class="meta">
+        <div class="n" title="${name}">${name}</div>
+        <div class="s">${formatBytes(file.size)} &middot; ${htmlEscape(
+      file.type
+    )} &middot; <b>${relativeTime(file.expiresAt)}</b></div>
       </div>
-
-      <div class="min-w-0 flex-1">
-        <p class="font-headline-sm text-headline-sm text-text-primary truncate" title="${name}">${name}</p>
-        <div class="flex flex-wrap items-center gap-space-xs font-label-code-md text-caption text-text-muted mt-0.5">
-          <span>${formatBytes(file.size)}</span><span>&bull;</span>
-          <span>${htmlEscape(file.type)}</span><span>&bull;</span>
-          <span class="text-primary">${relativeTime(file.expiresAt)}</span>
-        </div>
-      </div>
-
-      <div class="flex items-center gap-space-xs w-full sm:w-auto">
-        <a href="${download}" download
-          class="flex-1 sm:flex-none justify-center px-space-lg py-space-xs rounded-lg bg-primary text-white font-headline-sm text-body-sm hover:bg-primary-container transition-all inline-flex items-center gap-space-xs shadow-lg shadow-primary/20">
-          <span class="material-symbols-outlined text-[18px]">download</span>
-          Download
-        </a>
-        <a href="${raw}" target="_blank" rel="noopener"
-          class="flex-1 sm:flex-none justify-center px-space-md py-space-xs rounded-lg bg-surface-raised border border-border-subtle text-text-primary font-headline-sm text-body-sm hover:border-border-highlight transition-all inline-flex items-center gap-space-xs">
-          <span class="material-symbols-outlined text-[18px]">open_in_new</span>
-          Raw
-        </a>
+      <div class="acts">
+        <a class="btn pri sm" href="${download}" download>Download</a>
+        <a class="btn sm" href="${raw}" target="_blank" rel="noopener">Raw</a>
       </div>
     </div>
-
-    <div class="flex items-center justify-center p-space-lg bg-surface-deep min-h-[240px]">${media}</div>
-
-    <div class="flex items-center gap-space-xs px-space-lg py-space-md border-t border-border-subtle bg-surface-base">
-      <input id="link" type="text" readonly aria-label="Link to this file"
-        class="flex-1 min-w-0 h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-secondary font-label-code-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
-      <button id="copy" type="button"
-        class="h-10 px-space-md rounded-lg bg-surface-raised border border-border-subtle text-text-primary font-headline-sm text-body-sm hover:border-primary hover:text-primary transition-all inline-flex items-center gap-space-xs shrink-0">
-        <span class="material-symbols-outlined text-[18px]">content_copy</span>
-        <span id="copy-label">Copy link</span>
-      </button>
+    <div class="pv-b">${media}</div>
+    <div class="pv-f">
+      <input id="link" type="text" readonly aria-label="Link to this file">
+      <button id="copy" class="btn" type="button"><span id="copy-label">Copy link</span></button>
     </div>
   </div>
-
-  <p class="mt-space-lg text-center font-body-sm text-body-sm text-text-muted">
-    This link expires on its own.
-    <a class="text-text-secondary hover:text-primary transition-colors" href="/#share">Share a file of your own</a>
-  </p>
-
-</div>
+  <p class="sec-p" style="font-size:13.5px;margin-top:18px">This link deletes itself. <a href="/" style="color:var(--amber)">Send a file of your own</a>.</p>
 </div>
 </main>
-
 ${SITE_FOOTER}
-
 <script>
 (function () {
   var field = document.getElementById("link");
@@ -2676,13 +2340,11 @@ ${SITE_FOOTER}
       label.textContent = "Copied";
       setTimeout(function () { label.textContent = "Copy link"; }, 1600);
     };
-
     var manual = function () {
       field.select();
       document.execCommand("copy");
       mark();
     };
-
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(field.value).then(mark, manual);
     } else {
@@ -2691,7 +2353,6 @@ ${SITE_FOOTER}
   });
 
   var pre = document.getElementById("text");
-
   if (pre) {
     fetch(location.pathname + "?raw=1")
       .then(function (response) { return response.text(); })
@@ -2700,225 +2361,102 @@ ${SITE_FOOTER}
   }
 })();
 </script>
-
 </body>
 </html>`
   );
 }
 
-/* ============================================================
-   STATUS PAGES
-   ============================================================ */
-
-function statusPage({ status, code, title, message, tone = "primary" }) {
-  return htmlPage(
-`<!DOCTYPE html>
-<html class="dark" lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex">
-<title>${title} — Content Delivery</title>
-${HEAD_ASSETS}
-</head>
-<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
-
-${SITE_HEADER}
-
-<main class="w-full pt-16">
-<div class="relative overflow-hidden min-h-[70vh] flex items-center justify-center px-gutter-mobile">
-<div class="absolute -top-20 left-1/2 -translate-x-1/2 w-[620px] h-[300px] bg-${tone}/10 blur-[130px] pointer-events-none rounded-full"></div>
-
-<div class="relative text-center max-w-md py-space-3xl">
-  <div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center text-${tone} mx-auto mb-space-md">
-    <span class="material-symbols-outlined text-[24px]">${
-      status === 410 ? "hourglass_disabled" : "search_off"
-    }</span>
-  </div>
-
-  <div class="font-eyebrow text-eyebrow uppercase tracking-widest text-${tone} mb-space-xs">${code}</div>
-
-  <h1 class="font-headline-lg text-headline-lg text-text-primary font-semibold tracking-tight mb-space-sm">${title}</h1>
-
-  <p class="font-body-md text-body-md text-text-secondary leading-relaxed mb-space-lg">${message}</p>
-
-  <a class="px-space-lg py-space-sm rounded-lg bg-primary text-white font-headline-sm text-body-md hover:bg-primary-container transition-all inline-flex items-center gap-space-xs shadow-lg shadow-primary/20" href="/">
-    <span class="material-symbols-outlined text-[18px]">arrow_back</span>
-    Back to Content Delivery
-  </a>
-</div>
-</div>
-</main>
-
-${SITE_FOOTER}
-
-</body>
-</html>`,
-    status
-  );
-}
-
-function notFoundPage() {
-  return statusPage({
-    status: 404,
-    code: "404",
-    title: "That page doesn't exist",
-    message:
-      "The link may be wrong, or the file may have been deleted. Head back to the homepage to keep going.",
-  });
-}
-
-function expiredPage() {
-  return statusPage({
-    status: 410,
-    code: "410",
-    title: "This link has expired",
-    message:
-      "Public files are kept for seven days and then deleted. Ask whoever sent it to upload the file again.",
-    tone: "method-post",
-  });
-}
 
 /* ============================================================
    DASHBOARD
    ============================================================ */
 
+function dashboardShell() {
+  return (
+    '<header class="bar"><div class="bar-in">' +
+    '<a class="mark" href="/"><i>' +
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>' +
+    "</i>Content Delivery</a>" +
+    '<nav><a href="/docs">Docs</a><a href="/">Public drop</a></nav>' +
+    '<button id="refresh" class="btn" type="button">Refresh</button>' +
+    '<button id="logout" class="btn dng" type="button">Log out</button>' +
+    "</div></header>"
+  );
+}
+
 function dashboardPage() {
+  const lifetimeOptions = [
+    ["1h", "1 hour"],
+    ["6h", "6 hours"],
+    ["12h", "12 hours"],
+    ["1d", "1 day"],
+    ["3d", "3 days"],
+    ["7d", "7 days"],
+    ["30d", "30 days"],
+    ["90d", "90 days"],
+    ["never", "Never"],
+  ]
+    .map(
+      (option) =>
+        '<option value="' + option[0] + '"' +
+        (option[0] === "7d" ? " selected" : "") +
+        ">" + option[1] + "</option>"
+    )
+    .join("");
+
   return htmlPage(
-`<!DOCTYPE html>
-<html class="dark" lang="en">
+    `<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dashboard — Content Delivery</title>
+<title>Dashboard &mdash; Content Delivery</title>
 <meta name="description" content="Manage files in your Content Delivery bucket.">
-${HEAD_ASSETS}
+${HEAD}
 </head>
-<body class="bg-surface-deep font-body-md text-body-md text-on-surface antialiased">
-
+<body>
 <a class="skip" href="#main">Skip to content</a>
+${dashboardShell()}
+<main id="main">
+<div class="dash">
 
-<header class="fixed top-0 left-0 right-0 z-50 bg-surface-deep/85 backdrop-blur-xl border-b border-border-subtle">
-  <div class="h-16 max-w-[1240px] mx-auto px-gutter-mobile lg:px-gutter-desktop flex items-center justify-between gap-space-md">
-    <a class="flex items-center gap-space-xs min-w-0" href="/">
-      <div class="w-8 h-8 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center shrink-0">
-        <span class="material-symbols-outlined text-primary text-[18px]">cloud_sync</span>
-      </div>
-      <div class="min-w-0">
-        <div class="font-headline-sm text-headline-sm text-text-primary tracking-tight truncate">Content Delivery</div>
-        <div class="hidden sm:block font-label-code-md text-caption text-text-muted truncate">bucket: ${BUCKET_NAME} · v${VERSION}</div>
-      </div>
-    </a>
-
-    <div class="flex items-center gap-space-xs">
-      <a href="/docs" class="hidden sm:inline-flex px-space-md py-space-xs rounded-lg bg-surface-card border border-border-subtle text-text-secondary font-body-md text-body-sm hover:text-text-primary hover:border-border-highlight transition-all items-center gap-1.5">
-        <span class="material-symbols-outlined text-[16px]">description</span>
-        API docs
-      </a>
-      <button id="refresh" type="button" class="px-space-md py-space-xs rounded-lg bg-surface-card border border-border-subtle text-text-secondary font-body-md text-body-sm hover:text-text-primary hover:border-border-highlight transition-all inline-flex items-center gap-1.5">
-        <span class="material-symbols-outlined text-[16px]">refresh</span>
-        Refresh
-      </button>
-      <button id="logout" type="button" class="px-space-md py-space-xs rounded-lg bg-method-delete/10 border border-method-delete/30 text-method-delete font-body-md text-body-sm hover:border-method-delete/60 transition-all inline-flex items-center gap-1.5">
-        <span class="material-symbols-outlined text-[16px]">logout</span>
-        <span class="hidden sm:inline">Log out</span>
-      </button>
-    </div>
+  <div class="stats">
+    <div class="stat"><div class="k">Files</div><div class="v" id="stat-files">&mdash;</div></div>
+    <div class="stat"><div class="k">Storage used</div><div class="v" id="stat-storage">&mdash;</div></div>
+    <div class="stat"><div class="k">Public</div><div class="v" id="stat-public">&mdash;</div></div>
+    <div class="stat am"><div class="k">Expired</div><div class="v" id="stat-expired">&mdash;</div></div>
   </div>
-</header>
 
-<main id="main" class="w-full pt-16">
-<div class="relative overflow-hidden">
-<div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[720px] h-[300px] bg-primary/10 blur-[130px] pointer-events-none rounded-full"></div>
-
-<div class="max-w-[1240px] w-full mx-auto px-gutter-mobile lg:px-gutter-desktop py-space-xl relative space-y-space-md">
-
-  <!-- stats -->
-  <section class="grid grid-cols-2 lg:grid-cols-4 gap-space-md" aria-label="Storage statistics">
-    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
-      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-primary/60 to-transparent"></div>
-      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Files</div>
-      <div id="stat-files" class="mt-space-xs font-label-code-lg text-headline-md text-text-primary font-bold">—</div>
+  <section class="up" aria-label="Upload">
+    <div class="top">
+      <div class="h">Private upload &middot; streams to R2, no size cap</div>
+      <div class="h" style="color:var(--mute)">bucket: ${BUCKET_NAME} &middot; v${VERSION}</div>
     </div>
-    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
-      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-primary/60 to-transparent"></div>
-      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Storage used</div>
-      <div id="stat-storage" class="mt-space-xs font-label-code-lg text-headline-md text-text-primary font-bold">—</div>
+    <div class="row">
+      <input id="file-input" type="file" aria-label="Choose a file">
+      <label class="sr-only" for="lifetime">Lifetime</label>
+      <select id="lifetime" aria-label="Lifetime">${lifetimeOptions}</select>
+      <button id="upload-button" class="btn pri" type="button">Upload</button>
     </div>
-    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
-      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-tertiary/60 to-transparent"></div>
-      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Public</div>
-      <div id="stat-public" class="mt-space-xs font-label-code-lg text-headline-md text-tertiary font-bold">—</div>
-    </div>
-    <div class="relative rounded-xl bg-surface-card border border-border-subtle p-space-lg overflow-hidden">
-      <div class="absolute inset-x-space-lg top-0 h-[1px] bg-gradient-to-r from-method-post/60 to-transparent"></div>
-      <div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Expired</div>
-      <div id="stat-expired" class="mt-space-xs font-label-code-lg text-headline-md text-text-primary font-bold">—</div>
-    </div>
+    <div id="progress" role="status"></div>
   </section>
 
-  <!-- upload -->
-  <section class="relative rounded-2xl bg-surface-card border border-border-subtle p-space-sm sm:p-space-lg shadow-2xl group" aria-label="Upload">
-    <div class="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent"></div>
-
-    <div id="drop-target" class="relative flex flex-col items-center justify-center p-space-xl rounded-xl border-2 border-dashed border-border-subtle bg-surface-deep/90 hover:border-primary/60 transition-all duration-200 text-center">
-      <div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center mb-space-sm text-primary">
-        <span class="material-symbols-outlined text-[24px]">upload_file</span>
-      </div>
-
-      <p class="font-headline-sm text-headline-sm text-text-primary">Drop a file, or browse</p>
-      <p class="font-body-md text-body-md text-text-secondary mt-1">Streamed straight to R2 — no size cap on this side.</p>
-
-      <input id="file-input" type="file" aria-label="Choose a file"
-        class="w-full max-w-xl mt-space-md px-space-md py-space-xs rounded-lg bg-surface-deep border border-border-subtle text-text-secondary font-body-md text-body-sm file:mr-3 file:px-space-md file:py-1 file:rounded file:border-0 file:bg-surface-raised file:text-text-primary file:font-body-md file:text-body-sm file:cursor-pointer">
-
-      <div class="w-full max-w-xl mt-space-sm grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-space-xs">
-        <select id="expiry" aria-label="Expiration"
-          class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
-          <option value="1h">Expires in 1 hour</option>
-          <option value="6h">Expires in 6 hours</option>
-          <option value="12h">Expires in 12 hours</option>
-          <option value="1d">Expires in 1 day</option>
-          <option value="3d">Expires in 3 days</option>
-          <option value="7d" selected>Expires in 7 days</option>
-          <option value="30d">Expires in 30 days</option>
-          <option value="90d">Expires in 90 days</option>
-          <option value="never">Never expires</option>
-        </select>
-
-        <button id="upload-button" type="button"
-          class="h-10 px-space-lg rounded-lg bg-primary text-white font-headline-sm text-body-md hover:bg-primary-container transition-all inline-flex items-center justify-center gap-space-xs shadow-lg shadow-primary/20 disabled:opacity-60">
-          <span class="material-symbols-outlined text-[18px]">arrow_upward</span>
-          Upload
-        </button>
-      </div>
-
-      <div id="progress" class="mt-space-sm min-h-[18px] font-label-code-md text-caption text-text-muted" role="status"></div>
+  <section class="files" aria-label="Files">
+    <div class="files-h">
+      <div class="t">Files <em id="result-count">&mdash;</em></div>
     </div>
-  </section>
 
-  <!-- files -->
-  <section class="rounded-2xl bg-surface-card border border-border-subtle overflow-hidden" aria-label="Files">
-    <div class="flex items-center justify-between gap-space-md px-space-lg py-space-md border-b border-border-subtle bg-surface-base">
-      <div class="flex items-center gap-space-sm">
-        <span class="font-headline-sm text-headline-sm text-text-primary">Files</span>
-        <span id="result-count" class="font-label-code-md text-caption text-text-muted">—</span>
+    <div class="bulkbar" id="bulk">
+      <span class="n" id="selected-text">0 selected</span>
+      <div style="display:flex;gap:6px">
+        <button id="clear-selection" class="btn sm" type="button">Clear</button>
+        <button id="bulk-delete" class="btn sm dng" type="button">Delete selected</button>
       </div>
     </div>
 
-    <div id="bulk" class="hidden items-center justify-between gap-space-md px-space-lg py-space-xs border-b border-primary/25 bg-primary/5">
-      <span id="selected-text" class="font-label-code-md text-caption text-primary">0 selected</span>
-      <div class="flex items-center gap-space-xs">
-        <button id="clear-selection" type="button" class="px-space-sm py-1 rounded bg-surface-raised border border-border-subtle text-text-secondary font-body-md text-body-sm hover:text-text-primary transition-colors">Clear</button>
-        <button id="bulk-delete" type="button" class="px-space-sm py-1 rounded bg-method-delete/10 border border-method-delete/30 text-method-delete font-body-md text-body-sm hover:border-method-delete/60 transition-colors">Delete selected</button>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-[1fr_180px_150px] gap-space-xs px-space-lg py-space-sm border-b border-border-subtle">
-      <input id="search" placeholder="Search by filename…" aria-label="Search files"
-        class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm placeholder:text-text-muted focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
-      <select id="type-filter" aria-label="Filter by type"
-        class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+    <div class="filters">
+      <input id="search" type="search" placeholder="Search by filename" aria-label="Search files">
+      <select id="type-filter" aria-label="Filter by type">
         <option value="">All types</option>
         <option value="image/">Images</option>
         <option value="video/">Videos</option>
@@ -2927,24 +2465,23 @@ ${HEAD_ASSETS}
         <option value="text/">Text</option>
         <option value="application/zip">ZIP</option>
       </select>
-      <select id="sort" aria-label="Sort by"
-        class="h-10 px-space-md rounded-lg bg-surface-deep border border-border-subtle text-text-primary font-body-md text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/40 transition-all">
+      <select id="sort" aria-label="Sort by">
         <option value="uploaded">Newest first</option>
         <option value="name">Name</option>
         <option value="size">Size</option>
       </select>
     </div>
 
-    <div class="overflow-x-auto">
-      <table class="w-full min-w-[940px]">
+    <div class="tablewrap">
+      <table class="files-t">
         <thead>
-          <tr class="border-b border-border-subtle bg-surface-base">
-            <th class="w-10 px-space-md py-space-sm"><input id="select-all" type="checkbox" aria-label="Select all" class="rounded border-border-highlight bg-surface-deep text-primary focus:ring-primary/40"></th>
-            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">File</th>
-            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Size</th>
-            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Uploaded</th>
-            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Expires</th>
-            <th class="text-left px-space-md py-space-sm font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">Actions</th>
+          <tr>
+            <th class="cb"><input id="select-all" type="checkbox" aria-label="Select all"></th>
+            <th>File</th>
+            <th>Size</th>
+            <th>Uploaded</th>
+            <th>Expires</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -2953,528 +2490,446 @@ ${HEAD_ASSETS}
   </section>
 
 </div>
-</div>
 </main>
-
-<div id="toast" class="hidden fixed right-space-md bottom-space-md z-[80] max-w-sm px-space-md py-space-sm rounded-lg bg-surface-raised border border-border-subtle border-l-4 border-l-primary shadow-2xl font-body-md text-body-sm text-text-primary" role="status"></div>
-
-<div id="modal" class="hidden fixed inset-0 z-[90] items-center justify-center p-space-md bg-black/70 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="File information">
-  <div class="w-full max-w-2xl max-h-[88vh] overflow-auto rounded-2xl bg-surface-card border border-border-highlight p-space-lg shadow-2xl rise">
-    <div class="flex items-center justify-between mb-space-md">
-      <span class="font-headline-sm text-headline-sm text-text-primary">File information</span>
-      <button id="modal-close" type="button" aria-label="Close" class="w-8 h-8 rounded bg-surface-raised border border-border-subtle flex items-center justify-center text-text-secondary hover:text-primary transition-colors">
-        <span class="material-symbols-outlined text-[18px]">close</span>
+<div class="toast" id="toast" role="status"></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="File information">
+  <div class="card">
+    <div class="mh">
+      <span>File information</span>
+      <button id="modal-close" class="ib" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
       </button>
     </div>
-    <div id="modal-body" class="grid grid-cols-1 sm:grid-cols-2 gap-space-xs"></div>
+    <div id="modal-body" class="kv"></div>
   </div>
 </div>
+<script>(function () {
+  var files = [];
+  var selected = {};
+  var timer = null;
 
-<script>
-var files = [];
-var selected = {};
-var timer = null;
+  var GLYPH = {
+    img: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5-5-6 6"/>',
+    vid: '<rect x="3" y="5" width="13" height="14" rx="1.5"/><path d="M16 10l5-3v10l-5-3z"/>',
+    aud: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+    pdf: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+    zip: '<path d="M4 6h16v14H4z"/><path d="M12 6v6M10 12h4M12 15v3"/>',
+    txt: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8 13h8M8 17h5"/>',
+    bin: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>'
+  };
 
-var BTN =
-  "px-space-sm py-1 rounded bg-surface-raised border border-border-subtle font-body-md text-body-sm text-text-secondary hover:text-primary hover:border-primary transition-colors";
+  function glyph(type) {
+    type = String(type || "").toLowerCase();
+    if (type.indexOf("image/") === 0) return "img";
+    if (type.indexOf("video/") === 0) return "vid";
+    if (type.indexOf("audio/") === 0) return "aud";
+    if (type.indexOf("pdf") > -1) return "pdf";
+    if (type.indexOf("zip") > -1 || type.indexOf("compressed") > -1) return "zip";
+    if (type.indexOf("json") > -1 || type.indexOf("text/") === 0) return "txt";
+    return "bin";
+  }
 
-/* ---------- helpers ---------- */
+  function glyphSvg(type) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + GLYPH[glyph(type)] + "</svg>";
+  }
 
-function esc(value) {
-  var div = document.createElement("div");
-  div.textContent = String(value == null ? "" : value);
-  return div.innerHTML;
-}
+  function esc(value) {
+    var node = document.createElement("div");
+    node.textContent = String(value == null ? "" : value);
+    return node.innerHTML;
+  }
 
-function formatBytes(bytes) {
-  bytes = Number(bytes) || 0;
-  if (!bytes) return "0 B";
-  var units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + " " + units[i];
-}
+  function fmtBytes(bytes) {
+    bytes = Number(bytes) || 0;
+    if (!bytes) return "0 B";
+    var units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    var i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
+  }
 
-function formatDate(value) {
-  return new Date(value).toLocaleString();
-}
+  function fmtDate(value) {
+    var d = new Date(value);
+    if (isNaN(d)) return "—";
+    return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  }
 
-function relative(value) {
-  var diff = new Date(value).getTime() - Date.now();
-  if (diff <= 0) return "expired";
+  function relative(value) {
+    var diff = new Date(value).getTime() - Date.now();
+    if (diff <= 0) return "expired";
+    var minutes = Math.floor(diff / 60000);
+    if (minutes < 60) return "in " + Math.max(1, minutes) + "m";
+    var hours = Math.floor(minutes / 60);
+    if (hours < 24) return "in " + hours + "h";
+    return "in " + Math.floor(hours / 24) + "d";
+  }
 
-  var minutes = Math.floor(diff / 60000);
-  if (minutes < 60) return "in " + minutes + "m";
+  function ids() {
+    return Object.keys(selected);
+  }
 
-  var hours = Math.floor(minutes / 60);
-  if (hours < 24) return "in " + hours + "h";
+  function toast(message, bad) {
+    var node = document.getElementById("toast");
+    node.textContent = message;
+    node.className = "toast on" + (bad ? " bad" : "");
+    clearTimeout(window.__toast);
+    window.__toast = setTimeout(function () { node.className = "toast"; }, 3200);
+  }
 
-  return "in " + Math.floor(hours / 24) + "d";
-}
-
-function glyph(type) {
-  type = String(type || "").toLowerCase();
-  if (type.indexOf("image/") === 0) return "image";
-  if (type.indexOf("video/") === 0) return "movie";
-  if (type.indexOf("audio/") === 0) return "graphic_eq";
-  if (type.indexOf("pdf") > -1) return "picture_as_pdf";
-  if (type.indexOf("zip") > -1 || type.indexOf("compressed") > -1) return "folder_zip";
-  if (type.indexOf("json") > -1 || type.indexOf("text/") === 0) return "terminal";
-  return "draft";
-}
-
-function selectedIds() {
-  return Object.keys(selected);
-}
-
-function toast(message, isError) {
-  var element = document.getElementById("toast");
-
-  element.textContent = message;
-  element.classList.remove("hidden", "border-l-primary", "border-l-method-delete");
-  element.classList.add(isError ? "border-l-method-delete" : "border-l-primary");
-
-  clearTimeout(window.__toast);
-  window.__toast = setTimeout(function () {
-    element.classList.add("hidden");
-  }, 3500);
-}
-
-/* ---------- API ---------- */
-
-function api(path, options) {
-  return fetch(path, Object.assign({ credentials: "same-origin" }, options || {})).then(
-    function (response) {
-      if (response.status === 401) {
-        location.href = "/";
-        throw new Error("Session expired.");
+  function api(path, options) {
+    return fetch(path, Object.assign({ credentials: "same-origin" }, options || {})).then(
+      function (response) {
+        if (response.status === 401) {
+          location.href = "/";
+          throw new Error("Session expired.");
+        }
+        return response;
       }
-      return response;
-    }
-  );
-}
-
-function refreshAll() {
-  return Promise.all([loadFiles(), loadStats()]);
-}
-
-/* ---------- list ---------- */
-
-function skeleton() {
-  var rows = "";
-
-  for (var i = 0; i < 5; i++) {
-    rows +=
-      '<tr class="border-b border-border-subtle/60">' +
-      '<td class="px-space-md py-space-sm"></td>' +
-      '<td class="px-space-md py-space-sm"><div class="h-4 w-2/3 rounded bg-surface-raised animate-pulse"></div></td>' +
-      '<td class="px-space-md py-space-sm"><div class="h-4 w-12 rounded bg-surface-raised animate-pulse"></div></td>' +
-      '<td class="px-space-md py-space-sm"><div class="h-4 w-24 rounded bg-surface-raised animate-pulse"></div></td>' +
-      '<td class="px-space-md py-space-sm"><div class="h-4 w-14 rounded bg-surface-raised animate-pulse"></div></td>' +
-      '<td class="px-space-md py-space-sm"><div class="h-4 w-40 rounded bg-surface-raised animate-pulse"></div></td>' +
-      "</tr>";
-  }
-
-  return rows;
-}
-
-function emptyRow(title, text) {
-  return (
-    '<tr><td colspan="6">' +
-    '<div class="flex flex-col items-center gap-space-xs py-space-3xl text-center">' +
-    '<div class="w-12 h-12 rounded-xl bg-surface-raised border border-border-highlight flex items-center justify-center text-text-muted">' +
-    '<span class="material-symbols-outlined text-[24px]">inbox</span></div>' +
-    '<p class="font-headline-sm text-headline-sm text-text-primary">' + title + "</p>" +
-    '<p class="font-body-md text-body-md text-text-secondary">' + text + "</p>" +
-    "</div></td></tr>"
-  );
-}
-
-function loadFiles() {
-  var body = document.getElementById("rows");
-  body.innerHTML = skeleton();
-
-  var params = new URLSearchParams({
-    limit: "1000",
-    sort: document.getElementById("sort").value,
-    order: "desc",
-  });
-
-  var search = document.getElementById("search").value.trim();
-  var type = document.getElementById("type-filter").value;
-
-  if (search) params.set("search", search);
-  if (type) params.set("type", type);
-
-  return api("/api/files?" + params)
-    .then(function (response) {
-      return response.json().then(function (data) {
-        if (!response.ok) throw new Error((data.error && data.error.message) || "Failed to load files.");
-        return data;
-      });
-    })
-    .then(function (data) {
-      files = data.data || [];
-      renderFiles();
-    })
-    .catch(function (error) {
-      body.innerHTML = emptyRow("Could not load files", esc(error.message));
-    });
-}
-
-function renderFiles() {
-  var body = document.getElementById("rows");
-
-  document.getElementById("result-count").textContent =
-    files.length + (files.length === 1 ? " result" : " results");
-
-  if (!files.length) {
-    body.innerHTML = emptyRow(
-      "Nothing here yet",
-      "Upload your first file above and it will show up in this list."
     );
-    updateBulk();
-    return;
   }
 
-  body.innerHTML = "";
+  function refreshAll() {
+    return Promise.all([loadFiles(), loadStats()]);
+  }
 
-  files.forEach(function (file) {
-    var tr = document.createElement("tr");
-    tr.className = "border-b border-border-subtle/60 hover:bg-surface-raised/40 transition-colors";
+  function skeleton() {
+    var rows = "";
+    for (var i = 0; i < 5; i++) {
+      rows += '<tr><td class="cb"></td>' +
+        '<td><div style="height:13px;width:180px;background:var(--glass-3)"></div></td>' +
+        '<td><div style="height:13px;width:52px;background:var(--glass-3)"></div></td>' +
+        '<td><div style="height:13px;width:110px;background:var(--glass-3)"></div></td>' +
+        '<td><div style="height:13px;width:56px;background:var(--glass-3)"></div></td>' +
+        '<td><div style="height:13px;width:200px;background:var(--glass-3)"></div></td></tr>';
+    }
+    return rows;
+  }
 
-    var expiry = file.expires_at
-      ? '<span class="px-space-xs py-0.5 rounded bg-method-post/15 text-method-post font-label-code-md text-caption">' +
-        relative(file.expires_at) + "</span>"
-      : '<span class="px-space-xs py-0.5 rounded bg-primary/15 text-primary font-label-code-md text-caption">never</span>';
+  function emptyRow(title, text) {
+    return '<tr><td colspan="6"><div class="empty">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></svg>' +
+      "<b>" + title + "</b><p>" + text + "</p></div></td></tr>";
+  }
 
-    var badge =
-      file.visibility === "public"
-        ? '<span class="ml-space-xs px-1.5 py-0.5 rounded bg-tertiary/15 text-tertiary font-label-code-md text-[10px] uppercase tracking-wider">public</span>'
-        : "";
+  function loadFiles() {
+    var body = document.getElementById("rows");
+    body.innerHTML = skeleton();
 
-    tr.innerHTML =
-      '<td class="px-space-md py-space-sm align-middle">' +
-        '<input type="checkbox" data-select="' + esc(file.id) + '" ' +
-        (selected[file.id] ? "checked" : "") +
-        ' aria-label="Select file" class="rounded border-border-highlight bg-surface-deep text-primary focus:ring-primary/40"></td>' +
-      '<td class="px-space-md py-space-sm">' +
-        '<div class="flex items-center gap-space-sm min-w-0">' +
-          '<div class="w-9 h-9 rounded-lg bg-surface-raised border border-border-highlight flex items-center justify-center text-primary shrink-0">' +
-            '<span class="material-symbols-outlined text-[18px]">' + glyph(file.content_type) + "</span></div>" +
-          '<div class="min-w-0">' +
-            '<p class="font-body-md text-body-md text-text-primary font-medium truncate max-w-[260px]" title="' + esc(file.name) + '">' + esc(file.name) + "</p>" +
-            '<p class="font-label-code-md text-caption text-text-muted truncate">' + esc(file.content_type) + badge + "</p>" +
-          "</div></div></td>" +
-      '<td class="px-space-md py-space-sm font-label-code-md text-caption text-text-secondary whitespace-nowrap">' + formatBytes(file.size) + "</td>" +
-      '<td class="px-space-md py-space-sm font-label-code-md text-caption text-text-secondary whitespace-nowrap">' + formatDate(file.uploaded_at) + "</td>" +
-      '<td class="px-space-md py-space-sm whitespace-nowrap">' + expiry + "</td>" +
-      '<td class="px-space-md py-space-sm">' +
-        '<div class="flex items-center gap-space-2xs">' +
-          '<button class="' + BTN + '" data-open="' + esc(file.id) + '">Open</button>' +
-          '<button class="' + BTN + '" data-download="' + esc(file.id) + '">Download</button>' +
-          (file.public_url
-            ? '<button class="' + BTN + '" data-copy="' + esc(file.id) + '">Copy link</button>'
-            : "") +
-          '<button class="' + BTN + '" data-info="' + esc(file.id) + '">Info</button>' +
-          '<button class="px-space-sm py-1 rounded bg-method-delete/10 border border-method-delete/30 font-body-md text-body-sm text-method-delete hover:border-method-delete/60 transition-colors" data-delete="' + esc(file.id) + '">Delete</button>' +
+    var params = new URLSearchParams({
+      limit: "1000",
+      sort: document.getElementById("sort").value,
+      order: "desc"
+    });
+
+    var search = document.getElementById("search").value.trim();
+    var type = document.getElementById("type-filter").value;
+    if (search) params.set("search", search);
+    if (type) params.set("type", type);
+
+    return api("/api/files?" + params)
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error((data.error && data.error.message) || "Could not load files.");
+          return data;
+        });
+      })
+      .then(function (data) {
+        files = data.data || [];
+        renderFiles();
+      })
+      .catch(function (error) {
+        body.innerHTML = emptyRow("Could not load files", esc(error.message));
+      });
+  }
+
+  function renderFiles() {
+    var body = document.getElementById("rows");
+    document.getElementById("result-count").textContent =
+      files.length + (files.length === 1 ? " file" : " files");
+
+    if (!files.length) {
+      body.innerHTML = emptyRow("Nothing here yet", "Upload your first file above and it shows up in this list.");
+      updateBulk();
+      return;
+    }
+
+    body.innerHTML = "";
+
+    files.forEach(function (file) {
+      var tr = document.createElement("tr");
+
+      var expiry;
+      if (!file.expires_at) {
+        expiry = '<span class="pill never">never</span>';
+      } else if (Date.parse(file.expires_at) <= Date.now()) {
+        expiry = '<span class="pill dead">expired</span>';
+      } else {
+        expiry = '<span class="pill warn">' + relative(file.expires_at) + "</span>";
+      }
+
+      var badge = file.visibility === "public" ? '<span class="badge">public</span>' : "";
+
+      tr.innerHTML =
+        '<td class="cb"><input type="checkbox" data-select="' + esc(file.id) + '" ' +
+        (selected[file.id] ? "checked" : "") + ' aria-label="Select file"></td>' +
+        '<td><div class="fn"><div class="g">' + glyphSvg(file.content_type) + "</div>" +
+        '<div class="meta"><div class="n" title="' + esc(file.name) + '">' + esc(file.name) + "</div>" +
+        '<div class="ct">' + esc(file.content_type) + badge + "</div></div></div></td>" +
+        '<td style="font-family:var(--m);font-size:12px;white-space:nowrap">' + fmtBytes(file.size) + "</td>" +
+        '<td style="font-family:var(--m);font-size:12px;white-space:nowrap">' + fmtDate(file.uploaded_at) + "</td>" +
+        '<td>' + expiry + "</td>" +
+        '<td><div class="rowact">' +
+        '<button class="mini" data-open="' + esc(file.id) + '">Open</button>' +
+        '<button class="mini" data-download="' + esc(file.id) + '">Download</button>' +
+        (file.public_url ? '<button class="mini" data-copy="' + esc(file.id) + '">Copy link</button>' : "") +
+        '<button class="mini" data-info="' + esc(file.id) + '">Info</button>' +
+        '<button class="mini dng" data-delete="' + esc(file.id) + '">Delete</button>' +
         "</div></td>";
 
-    body.appendChild(tr);
-  });
+      body.appendChild(tr);
+    });
 
-  updateBulk();
-}
-
-/* ---------- stats ---------- */
-
-function loadStats() {
-  return api("/api/stats")
-    .then(function (response) {
-      return response.ok ? response.json() : null;
-    })
-    .then(function (data) {
-      if (!data) return;
-      document.getElementById("stat-files").textContent = data.files;
-      document.getElementById("stat-storage").textContent = data.formatted_bytes;
-      document.getElementById("stat-public").textContent = data.public_files || 0;
-      document.getElementById("stat-expired").textContent = data.expired;
-    })
-    .catch(function () {});
-}
-
-/* ---------- upload ---------- */
-
-function upload() {
-  var input = document.getElementById("file-input");
-  var file = input.files[0];
-
-  if (!file) {
-    toast("Choose a file first.", true);
-    return;
+    updateBulk();
   }
 
-  var progress = document.getElementById("progress");
-  var button = document.getElementById("upload-button");
-
-  button.disabled = true;
-  progress.textContent = "uploading " + file.name + "…";
-
-  var url =
-    "/api/upload?" +
-    new URLSearchParams({
-      filename: file.name,
-      expires: document.getElementById("expiry").value,
-    });
-
-  api(url, {
-    method: "PUT",
-    headers: { "Content-Type": file.type || "application/octet-stream" },
-    body: file,
-  })
-    .then(function (response) {
-      return response.json().then(function (data) {
-        if (!response.ok) throw new Error((data.error && data.error.message) || "Upload failed.");
-        return data;
-      });
-    })
-    .then(function () {
-      progress.textContent = "upload complete";
-      toast("File uploaded.");
-      input.value = "";
-      return refreshAll();
-    })
-    .catch(function (error) {
-      progress.textContent = "";
-      toast(error.message, true);
-    })
-    .then(function () {
-      button.disabled = false;
-    });
-}
-
-/* ---------- row actions ---------- */
-
-function deleteFile(id) {
-  var file = files.filter(function (item) { return item.id === id; })[0];
-
-  if (!confirm("Delete " + ((file && file.name) || "this file") + " permanently?")) return;
-
-  api("/api/files/" + encodeURIComponent(id), { method: "DELETE" })
-    .then(function (response) {
-      return response.json().then(function (data) {
-        if (!response.ok) throw new Error((data.error && data.error.message) || "Delete failed.");
-        return data;
-      });
-    })
-    .then(function () {
-      delete selected[id];
-      toast("File deleted.");
-      return refreshAll();
-    })
-    .catch(function (error) {
-      toast(error.message, true);
-    });
-}
-
-function copyPublic(id) {
-  var file = files.filter(function (item) { return item.id === id; })[0];
-  if (!file || !file.public_url) return;
-
-  var url = location.origin + file.public_url;
-
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(
-      function () { toast("Link copied."); },
-      function () { toast(url); }
-    );
-  } else {
-    toast(url);
+  function loadStats() {
+    return api("/api/stats")
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (data) {
+        if (!data) return;
+        document.getElementById("stat-files").textContent = data.files;
+        document.getElementById("stat-storage").textContent = data.formatted_bytes;
+        document.getElementById("stat-public").textContent = data.public_files || 0;
+        document.getElementById("stat-expired").textContent = data.expired;
+      })
+      .catch(function () {});
   }
-}
+  /* ---------- upload ---------- */
 
-/* ---------- bulk ---------- */
+  function upload() {
+    var input = document.getElementById("file-input");
+    var file = input.files[0];
 
-function updateBulk() {
-  var bar = document.getElementById("bulk");
-  var count = selectedIds().length;
-
-  document.getElementById("selected-text").textContent = count + " selected";
-
-  bar.classList.toggle("hidden", count === 0);
-  bar.classList.toggle("flex", count > 0);
-}
-
-function bulkDelete() {
-  var ids = selectedIds();
-  if (!ids.length) return;
-  if (!confirm("Delete " + ids.length + " selected files?")) return;
-
-  api("/api/files", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: ids }),
-  })
-    .then(function (response) {
-      return response.json().then(function (data) {
-        if (!response.ok) throw new Error((data.error && data.error.message) || "Bulk delete failed.");
-        return data;
-      });
-    })
-    .then(function (data) {
-      selected = {};
-      toast(data.deleted + " files deleted.");
-      return refreshAll();
-    })
-    .catch(function (error) {
-      toast(error.message, true);
-    });
-}
-
-/* ---------- info modal ---------- */
-
-function metaCell(label, value, wide) {
-  return (
-    '<div class="rounded-lg bg-surface-deep border border-border-subtle p-space-md' +
-    (wide ? ' sm:col-span-2' : "") + '">' +
-    '<div class="font-eyebrow text-eyebrow uppercase tracking-wider text-text-muted">' + label + "</div>" +
-    '<div class="mt-1 font-body-md text-body-sm text-text-primary break-all">' + value + "</div></div>"
-  );
-}
-
-function showInfo(id) {
-  var file = files.filter(function (item) { return item.id === id; })[0];
-  if (!file) return;
-
-  var body = document.getElementById("modal-body");
-
-  body.innerHTML =
-    metaCell("Name", esc(file.name)) +
-    metaCell("Size", formatBytes(file.size)) +
-    metaCell("Content type", esc(file.content_type)) +
-    metaCell("Visibility", esc(file.visibility || "private")) +
-    metaCell("Uploaded", formatDate(file.uploaded_at)) +
-    metaCell("Expires", file.expires_at ? formatDate(file.expires_at) : "Never") +
-    metaCell("ID", esc(file.id), true) +
-    metaCell("ETag", esc(file.etag || "—"), true) +
-    metaCell("API URL", esc(location.origin + "/api/files/" + file.id), true) +
-    (file.public_url
-      ? metaCell("Public link", esc(location.origin + file.public_url), true)
-      : "");
-
-  var modal = document.getElementById("modal");
-  modal.classList.remove("hidden");
-  modal.classList.add("flex");
-}
-
-function closeModal() {
-  var modal = document.getElementById("modal");
-  modal.classList.add("hidden");
-  modal.classList.remove("flex");
-}
-
-/* ---------- wiring ---------- */
-
-document.getElementById("rows").addEventListener("click", function (event) {
-  var button = event.target.closest("button");
-  if (!button) return;
-
-  var id;
-
-  if ((id = button.getAttribute("data-open"))) {
-    window.open("/api/files/" + encodeURIComponent(id), "_blank");
-  } else if ((id = button.getAttribute("data-download"))) {
-    window.open("/api/files/" + encodeURIComponent(id) + "?download=1", "_blank");
-  } else if ((id = button.getAttribute("data-copy"))) {
-    copyPublic(id);
-  } else if ((id = button.getAttribute("data-info"))) {
-    showInfo(id);
-  } else if ((id = button.getAttribute("data-delete"))) {
-    deleteFile(id);
-  }
-});
-
-document.getElementById("rows").addEventListener("change", function (event) {
-  var id = event.target.getAttribute("data-select");
-  if (!id) return;
-
-  if (event.target.checked) selected[id] = true;
-  else delete selected[id];
-
-  updateBulk();
-});
-
-document.getElementById("select-all").addEventListener("change", function () {
-  if (this.checked) {
-    files.forEach(function (file) { selected[file.id] = true; });
-  } else {
-    selected = {};
-  }
-  renderFiles();
-});
-
-document.getElementById("clear-selection").addEventListener("click", function () {
-  selected = {};
-  document.getElementById("select-all").checked = false;
-  renderFiles();
-});
-
-document.getElementById("bulk-delete").addEventListener("click", bulkDelete);
-document.getElementById("upload-button").addEventListener("click", upload);
-document.getElementById("refresh").addEventListener("click", function () { refreshAll(); });
-document.getElementById("sort").addEventListener("change", loadFiles);
-document.getElementById("type-filter").addEventListener("change", loadFiles);
-
-document.getElementById("search").addEventListener("input", function () {
-  clearTimeout(timer);
-  timer = setTimeout(loadFiles, 250);
-});
-
-document.getElementById("modal-close").addEventListener("click", closeModal);
-
-document.getElementById("modal").addEventListener("click", function (event) {
-  if (event.target.id === "modal") closeModal();
-});
-
-document.addEventListener("keydown", function (event) {
-  if (event.key === "Escape") closeModal();
-});
-
-document.getElementById("logout").addEventListener("click", function () {
-  fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).finally(function () {
-    location.href = "/";
-  });
-});
-
-/* ---------- drag and drop ---------- */
-
-(function () {
-  var target = document.getElementById("drop-target");
-  var input = document.getElementById("file-input");
-
-  ["dragenter", "dragover"].forEach(function (name) {
-    target.addEventListener(name, function (event) {
-      event.preventDefault();
-      target.classList.add("border-primary", "bg-primary/5");
-    });
-  });
-
-  target.addEventListener("dragleave", function (event) {
-    if (!target.contains(event.relatedTarget)) {
-      target.classList.remove("border-primary", "bg-primary/5");
+    if (!file) {
+      toast("Choose a file first.", true);
+      return;
     }
+
+    var progress = document.getElementById("progress");
+    var button = document.getElementById("upload-button");
+    var lifetime = document.getElementById("lifetime").value;
+
+    button.disabled = true;
+    progress.textContent = "uploading " + file.name + " (" + lifetime + ")…";
+
+    var url = "/api/upload?" + new URLSearchParams({ filename: file.name, expires: lifetime });
+
+    api(url, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error((data.error && data.error.message) || "Upload failed.");
+          return data;
+        });
+      })
+      .then(function () {
+        progress.textContent = "uploaded " + file.name;
+        toast("File uploaded.");
+        input.value = "";
+        return refreshAll();
+      })
+      .catch(function (error) {
+        progress.textContent = "";
+        toast(error.message, true);
+      })
+      .then(function () { button.disabled = false; });
+  }
+
+  /* ---------- row actions ---------- */
+
+  function deleteFile(id) {
+    var file = files.filter(function (item) { return item.id === id; })[0];
+    if (!confirm("Delete " + ((file && file.name) || "this file") + " permanently?")) return;
+
+    api("/api/files/" + encodeURIComponent(id), { method: "DELETE" })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error((data.error && data.error.message) || "Delete failed.");
+          return data;
+        });
+      })
+      .then(function () {
+        delete selected[id];
+        toast("File deleted.");
+        return refreshAll();
+      })
+      .catch(function (error) { toast(error.message, true); });
+  }
+
+  function copyPublic(id) {
+    var file = files.filter(function (item) { return item.id === id; })[0];
+    if (!file || !file.public_url) return;
+
+    var url = location.origin + file.public_url;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(
+        function () { toast("Link copied."); },
+        function () { window.prompt("Copy this link", url); }
+      );
+    } else {
+      window.prompt("Copy this link", url);
+    }
+  }
+
+  /* ---------- bulk ---------- */
+
+  function updateBulk() {
+    var bar = document.getElementById("bulk");
+    var count = ids().length;
+    document.getElementById("selected-text").textContent = count + " selected";
+    bar.classList.toggle("on", count > 0);
+  }
+
+  function bulkDelete() {
+    var list = ids();
+    if (!list.length) return;
+    if (!confirm("Delete " + list.length + " selected files?")) return;
+
+    api("/api/files", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: list })
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error((data.error && data.error.message) || "Bulk delete failed.");
+          return data;
+        });
+      })
+      .then(function (data) {
+        selected = {};
+        toast(data.deleted + " files deleted.");
+        return refreshAll();
+      })
+      .catch(function (error) { toast(error.message, true); });
+  }
+
+  /* ---------- info modal ---------- */
+
+  function cell(label, value, wide) {
+    return '<div' + (wide ? ' class="wide"' : "") + '>' +
+      '<div class="k">' + label + "</div>" +
+      '<div class="v">' + value + "</div></div>";
+  }
+
+  function showInfo(id) {
+    var file = files.filter(function (item) { return item.id === id; })[0];
+    if (!file) return;
+
+    document.getElementById("modal-body").innerHTML =
+      cell("Name", esc(file.name)) +
+      cell("Size", fmtBytes(file.size)) +
+      cell("Content type", esc(file.content_type)) +
+      cell("Visibility", esc(file.visibility || "private")) +
+      cell("Uploaded", fmtDate(file.uploaded_at)) +
+      cell("Expires", file.expires_at ? fmtDate(file.expires_at) : "Never") +
+      cell("ID", esc(file.id), true) +
+      cell("ETag", esc(file.etag || "—"), true) +
+      cell("API URL", esc(location.origin + "/api/files/" + file.id), true) +
+      (file.public_url ? cell("Public link", esc(location.origin + file.public_url), true) : "");
+
+    document.getElementById("modal").classList.add("on");
+  }
+
+  function closeModal() {
+    document.getElementById("modal").classList.remove("on");
+  }
+
+  /* ---------- wiring ---------- */
+
+  document.getElementById("rows").addEventListener("click", function (event) {
+    var button = event.target.closest("button");
+    if (!button) return;
+    var id;
+    if ((id = button.getAttribute("data-open"))) window.open("/api/files/" + encodeURIComponent(id), "_blank");
+    else if ((id = button.getAttribute("data-download"))) window.open("/api/files/" + encodeURIComponent(id) + "?download=1", "_blank");
+    else if ((id = button.getAttribute("data-copy"))) copyPublic(id);
+    else if ((id = button.getAttribute("data-info"))) showInfo(id);
+    else if ((id = button.getAttribute("data-delete"))) deleteFile(id);
   });
 
-  target.addEventListener("drop", function (event) {
-    event.preventDefault();
-    target.classList.remove("border-primary", "bg-primary/5");
-    if (event.dataTransfer.files.length) input.files = event.dataTransfer.files;
+  document.getElementById("rows").addEventListener("change", function (event) {
+    var id = event.target.getAttribute("data-select");
+    if (!id) return;
+    if (event.target.checked) selected[id] = true;
+    else delete selected[id];
+    updateBulk();
   });
+
+  document.getElementById("select-all").addEventListener("change", function () {
+    if (this.checked) files.forEach(function (file) { selected[file.id] = true; });
+    else selected = {};
+    renderFiles();
+  });
+
+  document.getElementById("clear-selection").addEventListener("click", function () {
+    selected = {};
+    document.getElementById("select-all").checked = false;
+    renderFiles();
+  });
+
+  document.getElementById("bulk-delete").addEventListener("click", bulkDelete);
+  document.getElementById("upload-button").addEventListener("click", upload);
+  document.getElementById("refresh").addEventListener("click", function () { refreshAll(); });
+  document.getElementById("sort").addEventListener("change", loadFiles);
+  document.getElementById("type-filter").addEventListener("change", loadFiles);
+
+  document.getElementById("search").addEventListener("input", function () {
+    clearTimeout(timer);
+    timer = setTimeout(loadFiles, 250);
+  });
+
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  document.getElementById("modal").addEventListener("click", function (event) {
+    if (event.target.id === "modal") closeModal();
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") closeModal();
+  });
+
+  document.getElementById("logout").addEventListener("click", function () {
+    fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).finally(function () {
+      location.href = "/";
+    });
+  });
+
+  /* drop a file onto the input by dragging anywhere on the upload panel */
+  (function () {
+    var panel = document.querySelector(".up");
+    var input = document.getElementById("file-input");
+    ["dragenter", "dragover"].forEach(function (name) {
+      panel.addEventListener(name, function (event) {
+        event.preventDefault();
+        panel.style.borderColor = "var(--amber)";
+      });
+    });
+    ["dragleave", "drop"].forEach(function (name) {
+      panel.addEventListener(name, function (event) {
+        event.preventDefault();
+        panel.style.borderColor = "";
+        if (name === "drop" && event.dataTransfer.files.length) input.files = event.dataTransfer.files;
+      });
+    });
+  })();
+
+  refreshAll();
 })();
-
-refreshAll();
 </script>
-
 </body>
 </html>`
   );
 }
+

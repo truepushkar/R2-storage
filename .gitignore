@@ -24,3 +24,10 @@ Thumbs.db
 
 # Node
 node_modules/
+# Wrangler local state
+.wrangler/
+.wrangler-*/
+
+# Build scratch output
+build/live-backup/
+build/out/

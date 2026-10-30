@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Content Delivery — send a file, get a link</title>
+<meta name="description" content="Drop a file, get a link. Files are stored on Cloudflare R2 and delete themselves after seven days.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#05070a; --vac:#0a0e13; --panel:#0c1219;
+  --steel:#24405a; --steel-2:#33597a; --steel-3:#152736;
+  --y:#ffd400; --cyan:#2bd9f0; --red:#ff4438; --ink:#e8eef4; --ink2:#9db0c2; --mute:#6c8091;
+  --d:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;
+  --m:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--void);color:var(--ink);font:400 15.5px/1.6 var(--d);-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;flex-direction:column;overflow-x:hidden}
+::selection{background:var(--y);color:#05070a}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+*{scrollbar-width:thin;scrollbar-color:var(--steel-3) transparent}
+a{color:inherit;text-decoration:none}
+h1,h2,h3{margin:0;font-family:var(--d);font-weight:600;line-height:1;letter-spacing:-.025em;text-wrap:balance}
+p{margin:0}
+.skip{position:absolute;left:-9999px;z-index:99;background:var(--y);color:#05070a;padding:9px 15px;font-weight:600}
+.skip:focus{left:8px}
+.mono{font-family:var(--m);font-variant-numeric:tabular-nums}
+.tag{font-family:var(--m);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+
+/* bar */
+.bar{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--steel-3);background:color-mix(in srgb,var(--void) 90%,transparent);backdrop-filter:blur(10px)}
+.bar-in{max-width:1280px;margin:0 auto;height:56px;padding:0 22px;display:flex;align-items:center;gap:18px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px;letter-spacing:-.01em}
+.brand svg{width:20px;height:20px;color:var(--y)}
+.brand b{font-weight:600}
+.brand span{color:var(--mute);font-family:var(--m);font-size:10.5px;letter-spacing:.12em}
+nav.ml{margin-left:auto;display:flex;gap:2px}
+nav.ml a{font-family:var(--m);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink2);padding:8px 12px;border-radius:3px;transition:.15s}
+nav.ml a:hover{color:var(--y);background:var(--vac)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 15px;border:1px solid var(--steel-2);background:transparent;color:var(--ink);font-family:var(--m);font-size:11px;letter-spacing:.12em;text-transform:uppercase;border-radius:3px;cursor:pointer;transition:.15s}
+.btn:hover{border-color:var(--cyan);color:var(--cyan)}
+.btn.pri{background:var(--y);border-color:var(--y);color:#05070a;font-weight:600}
+.btn.pri:hover{background:#ffe340;color:#05070a}
+
+/* ---------- event display ---------- */
+.event{position:relative;max-width:1280px;margin:0 auto;padding:0 22px;display:grid;grid-template-columns:minmax(0,0.92fr) minmax(0,1.08fr);gap:0;align-items:center;min-height:min(760px,calc(100dvh - 56px))}
+.cop{padding:44px 30px 44px 0;position:relative;z-index:3}
+h1{font-size:clamp(40px,5.4vw,72px);letter-spacing:-.038em;line-height:.94}
+h1 em{font-style:normal;color:var(--y)}
+.lede{margin-top:20px;color:var(--ink2);max-width:44ch;font-size:16px}
+.lede b{color:var(--ink);font-weight:600}
+.cta{margin-top:26px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.under{margin-top:22px;display:flex;flex-wrap:wrap;gap:6px 20px;font-family:var(--m);font-size:11.5px;color:var(--mute);letter-spacing:.03em}
+.under b{color:var(--ink2);font-weight:500}
+
+/* detector */
+.det{position:relative;aspect-ratio:1;width:100%;max-width:640px;margin:0 auto;justify-self:center}
+.det svg{width:100%;height:100%;display:block;overflow:visible}
+.ring{fill:none;stroke:var(--steel);stroke-width:1}
+.ring.hi{stroke:var(--steel-2)}
+.tick{stroke:var(--steel);stroke-width:1}
+.ticklbl{fill:var(--mute);font:9px var(--m);letter-spacing:.08em}
+.core{fill:none;stroke:var(--y);stroke-width:1.2}
+.beam{stroke:var(--steel-3);stroke-width:1;stroke-dasharray:2 6}
+.track{fill:none;stroke:var(--cyan);stroke-width:1.4;opacity:.75;stroke-dasharray:340;stroke-dashoffset:0;animation:draw 1.4s cubic-bezier(.2,.9,.2,1) both}
+.track.y{stroke:var(--y)}
+.track.w{stroke:#8fb7d8}
+@keyframes draw{from{stroke-dashoffset:340}to{stroke-dashoffset:0}}
+.det .lbl{fill:var(--ink2);font:10px var(--m);letter-spacing:.1em;text-transform:uppercase}
+.det .val{fill:var(--y);font:11px var(--m)}
+.dropper{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36%;aspect-ratio:1;border-radius:50%;display:grid;place-items:center;text-align:center;cursor:pointer;border:1px dashed rgba(255,212,0,.45);background:radial-gradient(circle,rgba(255,212,0,.10),rgba(255,212,0,.02) 62%,transparent 72%);transition:.2s}
+.dropper:hover,.dropper.over{background:radial-gradient(circle,rgba(255,212,0,.22),rgba(255,212,0,.05) 62%,transparent 72%);border-color:var(--y)}
+.dropper input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border-radius:50%}
+.dropper b{display:block;font-family:var(--m);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--y)}
+.dropper em{display:block;font-style:normal;font-size:11px;color:var(--mute);margin-top:5px;font-family:var(--m)}
+
+/* legend rail */
+.detwrap{position:relative}
+.railpos{display:flex;flex-wrap:wrap;gap:8px 22px;justify-content:center;margin-top:16px}
+.railpos div{display:none}
+.railpos .lg{display:flex;gap:9px;align-items:center}
+.railpos .lg i{height:1px;width:24px;display:block;flex:none}
+.railpos .lg span{font-family:var(--m);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);white-space:nowrap}
+.railpos i{height:1px;background:var(--steel-2);display:block}
+.railpos i.y{background:var(--y)}
+.railpos i.c{background:var(--cyan)}
+.railpos span{font-family:var(--m);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);white-space:nowrap}
+
+/* ---------- sections ---------- */
+.wrap{max-width:1280px;margin:0 auto;padding:0 22px}
+.sec{padding:60px 0 8px;border-top:1px solid var(--steel-3)}
+.h2{font-size:clamp(26px,3vw,38px);letter-spacing:-.03em}
+.sec p.sub{margin-top:12px;color:var(--ink2);max-width:60ch}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:34px;margin-top:28px;align-items:start}
+.two>*{min-width:0}
+
+/* layers */
+.layers{display:grid;gap:0;margin-top:28px;border-top:1px solid var(--steel-3)}
+.ly{display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:16px;padding:15px 0;border-bottom:1px solid var(--steel-3)}
+.ly .n{font-family:var(--m);font-size:11px;color:var(--mute)}
+.ly b{display:block;font-size:15px;font-weight:600}
+.ly span{display:block;color:var(--ink2);font-size:13.5px;margin-top:3px}
+.ly .v{font-family:var(--m);font-size:11px;color:var(--y);letter-spacing:.06em;white-space:nowrap}
+
+/* decay */
+.decay{display:grid;gap:0;margin-top:28px;border-top:1px solid var(--steel-3);max-width:640px}
+.dr{display:grid;grid-template-columns:70px minmax(0,1fr) 96px;align-items:center;gap:16px;padding:10px 0;border-bottom:1px solid var(--steel-3);background:none;border-left:0;border-right:0;border-top:0;color:inherit;font:inherit;text-align:left;cursor:pointer;transition:.15s}
+.dr:hover .dl{color:var(--ink)}
+.dr[aria-pressed="true"]{background:rgba(255,212,0,.06)}
+.dl{font-family:var(--m);font-size:13px;color:var(--ink2);transition:.15s}
+.dr[aria-pressed="true"] .dl{color:var(--y)}
+.dbar{height:5px;background:var(--steel-3);position:relative}
+.dbar i{position:absolute;inset:0 auto 0 0;background:var(--steel-2);min-width:2px}
+.dr[aria-pressed="true"] .dbar i{background:var(--y)}
+.dd{font-family:var(--m);font-size:10.5px;color:var(--mute);text-align:right;letter-spacing:.04em}
+.dr[aria-pressed="true"] .dd{color:var(--y)}
+.ro{margin-top:16px;font-family:var(--m);font-size:12px;color:var(--mute);letter-spacing:.03em}
+.ro b{color:var(--y)}
+
+/* code */
+.code{margin-top:26px;border:1px solid var(--steel-3);background:var(--panel);border-radius:4px;overflow:hidden}
+.ctabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--steel-3);scrollbar-width:none}
+.ctabs::-webkit-scrollbar{display:none}
+.ct{appearance:none;border:0;border-right:1px solid var(--steel-3);background:transparent;color:var(--ink2);font-family:var(--m);font-size:11px;letter-spacing:.06em;padding:11px 14px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:8px;transition:.15s}
+.ct .vb{font-size:9.5px;padding:2px 5px;border:1px solid var(--steel-2);color:var(--ink2);letter-spacing:.06em}
+.ct:hover{color:var(--ink)}
+.ct[aria-selected="true"]{color:var(--y);background:var(--vac)}
+.ct[aria-selected="true"] .vb{border-color:rgba(255,212,0,.55);color:var(--y)}
+.cpane{padding:18px 18px 20px}
+pre{margin:0;font:12.5px/1.7 var(--m);color:#a8bccd;overflow-x:auto;tab-size:2}
+pre .a{color:var(--y)}
+pre .b{color:var(--cyan)}
+pre .m{color:#8fa4b6}
+.plbl{font-family:var(--m);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);margin-bottom:8px}
+
+/* event record */
+.record{margin-top:26px;border:1px solid var(--steel-3);border-radius:4px;background:var(--panel);overflow:hidden}
+.rec-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid var(--steel-3);font-family:var(--m);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+.rec-h b{color:var(--ink2);font-weight:500}
+.rec-body{padding:14px 16px;display:grid;gap:0}
+.rq{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;padding:11px 0;border-bottom:1px solid var(--steel-3);animation:rise .45s cubic-bezier(.16,1,.3,1) both}
+.rq:last-child{border-bottom:0}
+.rq .nm{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rq .k{font-family:var(--m);font-size:10.5px;color:var(--mute);margin-top:3px}
+.rq .k b{color:var(--cyan);font-weight:500}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.acts{display:flex;gap:5px}
+.ib{width:29px;height:29px;display:grid;place-items:center;border:1px solid var(--steel-3);background:transparent;color:var(--ink2);border-radius:3px;cursor:pointer;transition:.15s}
+.ib:hover{color:var(--y);border-color:rgba(255,212,0,.5)}
+.ib svg{width:14px;height:14px}
+.empty{padding:26px 16px;text-align:center;color:var(--mute);font-family:var(--m);font-size:11.5px;letter-spacing:.05em}
+.qmeter{width:96px;height:2px;background:var(--steel-3)}
+.qmeter i{display:block;height:100%;width:0;background:var(--y);transition:width .25s}
+
+/* operator */
+.op{margin-top:26px;border:1px solid var(--steel-3);border-radius:4px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.op .l{padding:24px 22px;border-right:1px solid var(--steel-3);background:var(--panel)}
+.op .r{padding:24px 22px}
+.op h3{font-size:16px;font-weight:600}
+.op p{color:var(--ink2);font-size:13.5px;margin-top:7px}
+.lbl2{display:block;font-family:var(--m);font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--mute);margin-bottom:7px}
+.inp{display:flex;gap:8px;margin-top:16px}
+input[type=password]{flex:1;min-width:0;height:40px;padding:0 12px;background:var(--void);border:1px solid var(--steel-2);color:var(--ink);font:12.5px var(--m);border-radius:3px}
+input[type=password]:focus{outline:none;border-color:var(--y)}
+.err{display:none;margin-top:11px;padding:8px 11px;border:1px solid rgba(255,68,56,.45);color:#ff8b81;font:11.5px var(--m);border-radius:3px;background:rgba(255,68,56,.07)}
+.err.on{display:block}
+.kv{margin:16px 0 0;display:grid;gap:0}
+.kv div{display:grid;grid-template-columns:1fr auto;gap:12px;padding:8px 0;border-bottom:1px solid var(--steel-3);font-size:13px;color:var(--ink2)}
+.kv b{color:var(--ink);font-weight:500}
+.kv em{font-style:normal;font-family:var(--m);font-size:10.5px;color:var(--mute)}
+
+footer{border-top:1px solid var(--steel-3);margin-top:56px}
+.foot{max-width:1280px;margin:0 auto;padding:20px 22px;display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;font-family:var(--m);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.foot a:hover{color:var(--y)}
+.foot .sp{margin-left:auto}
+.toast{position:fixed;left:50%;bottom:20px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:var(--y);color:#05070a;padding:10px 18px;font-family:var(--m);font-size:11px;letter-spacing:.12em;text-transform:uppercase;transition:.24s cubic-bezier(.16,1,.3,1);z-index:70;border-radius:3px}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+@media (max-width:1040px){
+  .event{grid-template-columns:1fr;min-height:0;padding-top:18px;padding-bottom:34px}
+  .cop{padding:24px 0 0}
+  .det{max-width:520px;margin-top:26px}
+  .railpos{display:none}
+  .two{grid-template-columns:minmax(0,1fr);gap:26px}
+  .op{grid-template-columns:1fr}
+  .op .l{border-right:0;border-bottom:1px solid var(--steel-3)}
+}
+@media (max-width:640px){
+  .bar-in{padding:0 14px;gap:10px;height:52px}
+  .brand span{display:none}
+  nav.ml a:not(.keep){display:none}
+  .event,.wrap{padding-left:15px;padding-right:15px}
+  h1{font-size:clamp(34px,10.5vw,46px)}
+  .dropper{width:44%}
+  .dropper em{display:none}
+  .dr{grid-template-columns:56px minmax(0,1fr) 74px;gap:10px}
+  .ly{grid-template-columns:34px minmax(0,1fr);gap:12px}
+  .ly .v{grid-column:2;padding-top:2px}
+  pre{font-size:11px}
+  .op .l,.op .r{padding:20px 16px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto}.track{stroke-dashoffset:0}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar"><div class="bar-in">
+  <a class="brand" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg><b>Content Delivery</b><span>R2</span></a>
+  <nav class="ml">
+    <a class="keep" href="#drop">Drop</a>
+    <a href="#layers">How it works</a>
+    <a href="#decay">Expiry</a>
+    <a href="#api">API</a>
+    <a href="#operator">Sign in</a>
+  </nav>
+  <a class="btn pri" href="#operator">Dashboard</a>
+</div></header>
+
+<main id="main">
+<section class="event">
+  <div class="cop">
+    <h1>Drop a file.<br>Watch it <em>land.</em></h1>
+    <p class="lede">The file streams straight into Cloudflare R2, gets a link anyone can open, and deletes itself after seven days. <b>No account, no key, no client library.</b></p>
+    <div class="under">
+      <span><b>100 MB</b> per file</span>
+      <span><b>7 days</b> then gone</span>
+      <span><b>Any</b> file type</span>
+      <span><b>206</b> range ready</span>
+    </div>
+  </div>
+
+  <div class="detwrap">
+    <div class="det" id="det">
+      <svg id="evsvg" viewBox="0 0 600 600" role="img" aria-label="Detector cross-section with the drop target at its core">
+        <defs>
+          <radialGradient id="vac" cx="50%" cy="50%" r="50%">
+            <stop offset="0" stop-color="#0e1621"/><stop offset="1" stop-color="#05070a"/>
+          </radialGradient>
+        </defs>
+        <circle cx="300" cy="300" r="298" fill="url(#vac)"/>
+        <g id="rings"></g>
+        <g id="tracks"></g>
+        <circle class="core" cx="300" cy="300" r="52"/>
+        <g id="wedges"></g>
+        <g id="calls"></g>
+      </svg>
+      <label class="dropper" id="dropper">
+        <input type="file" id="file-input" multiple aria-label="Choose files to upload">
+        <span><b>Drop here</b><em>or browse</em></span>
+      </label>
+    </div>
+    <div class="railpos">
+      <div class="lg"><i class="y"></i><span>your file</span></div>
+      <div class="lg"><i style="background:var(--cyan)"></i><span>link in</span></div>
+      <div class="lg"><i style="background:#8fb7d8"></i><span>link out</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec" id="layers">
+  <h2 class="h2">Four layers, one request</h2>
+  <p class="sub">Each layer is a real part of the system you can inspect and address on its own: the request, the bucket, the object, and the public link.</p>
+  <div class="layers" id="layers-list"></div>
+</section>
+
+<section class="wrap sec" id="decay">
+  <div class="two">
+    <div>
+      <h2 class="h2">Every track decays</h2>
+      <p class="sub">A lifetime is attached at upload. The scheduled sweep clears what has passed, and a download past its date deletes the object on the spot. Select a lifetime to see when an upload now would end.</p>
+      <div class="decay" id="decay-list" role="group" aria-label="Supported expirations"></div>
+      <div class="ro">Deletes <b id="ro-date">&mdash;</b></div>
+    </div>
+    <div>
+      <div class="code">
+        <div class="ctabs" role="tablist" id="ctabs"></div>
+        <div class="cpane" id="cpane"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec" id="api">
+  <h2 class="h2">The event log is the product</h2>
+  <p class="sub">Two ways in. The public dropper needs nothing; the private API needs your key. Both write to the same bucket, and both give back a URL that works in a browser and in a client.</p>
+  <div class="two" style="margin-top:26px">
+    <div class="record">
+      <div class="rec-h"><span>public drop</span><b>/f/:id</b></div>
+      <div class="rec-body" id="record"></div>
+    </div>
+    <div class="record">
+      <div class="rec-h"><span>private api</span><b>bearer token</b></div>
+      <div class="rec-body">
+        <pre style="color:#a8bccd">
+<span class="a">PUT</span>  <span class="b">/api/upload</span>?filename=&amp;expires=  <span class="m">stream in</span>
+<span class="a">GET</span>  <span class="b">/api/files</span>                    <span class="m">search, sort, cursor</span>
+<span class="a">GET</span>  <span class="b">/api/files/:id</span>                <span class="m">bytes or range</span>
+<span class="a">HEAD</span> <span class="b">/api/files/:id</span>                <span class="m">metadata only</span>
+<span class="a">GET</span>  <span class="b">/api/stats</span>                    <span class="m">bytes, count, expired</span>
+<span class="a">DEL</span>  <span class="b">/api/files</span>                    <span class="m">bulk, 1000 max</span>
+</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec" id="operator">
+  <h2 class="h2">Operator access</h2>
+  <p class="sub">The API key opens the dashboard and every private endpoint. It is the only credential in the system.</p>
+  <div class="op">
+    <div class="l">
+      <h3>Patch in</h3>
+      <p>Set once with <span class="mono" style="color:var(--y);font-size:12px">wrangler secret put API_KEY</span>.</p>
+      <form id="login" novalidate>
+        <label class="lbl2" for="key" style="margin-top:18px">API key</label>
+        <div class="inp"><input id="key" type="password" autocomplete="current-password" placeholder="paste key"><button class="ib" type="button" id="reveal" aria-label="Show key" style="width:40px;height:40px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg></button></div>
+        <div class="err" id="login-err" role="alert"></div>
+        <button class="btn pri" type="submit" style="width:100%;margin-top:14px;height:40px"><span id="login-label">Sign in</span></button>
+      </form>
+    </div>
+    <div class="r">
+      <h3>Behind the key</h3>
+      <p>Everything the public drop cannot do.</p>
+      <div class="kv">
+        <div><span><b>Every file, searchable</b></span><em>name, type, size</em></div>
+        <div><span><b>Storage totals</b></span><em>bytes, count, expired</em></div>
+        <div><span><b>Bulk delete</b></span><em>1000 per call</em></div>
+        <div><span><b>Per-file metadata</b></span><em>etag, expiry, url</em></div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer><div class="foot">
+  <span>Content Delivery &mdash; Workers + R2</span>
+  <a href="#api">API docs</a>
+  <a href="#operator">Dashboard</a>
+  <span class="sp">v4.0.0</span>
+</div></footer>
+<div class="toast" id="toast" role="status"></div>
+<script>
+(function(){
+var HOST = "https://cdn.nullstacks.workers.dev";
+var NS = "http://www.w3.org/2000/svg";
+
+/* ---------- detector drawing ---------- */
+var rings = document.getElementById("rings");
+var tracks = document.getElementById("tracks");
+var wedges = document.getElementById("wedges");
+var calls = document.getElementById("calls");
+
+function el(tag, attrs, parent){
+  var n = document.createElementNS(NS, tag);
+  for (var k in attrs) if (attrs.hasOwnProperty(k)) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+
+/* concentric detector rings: r, label */
+var RING = [[92,"inner"], [148,"tracker"], [206,"calo"], [262,"muon"]];
+RING.forEach(function(r, i){
+  el("circle", { cx:300, cy:300, r:r[0], "class":"ring" + (i===1?" hi":"") }, rings);
+});
+/* radial ticks around the outer ring */
+for (var a = 0; a < 360; a += 5) {
+  var rad = a * Math.PI / 180;
+  var big = (a % 30 === 0);
+  var r1 = big ? 262 : 266, r2 = 278;
+  el("line", {
+    x1: 300 + Math.cos(rad) * r1, y1: 300 + Math.sin(rad) * r1,
+    x2: 300 + Math.cos(rad) * r2, y2: 300 + Math.sin(rad) * r2,
+    "class": "tick"
+  }, rings);
+}
+/* ring labels */
+RING.forEach(function(r){
+  el("text", { x:300, y:300 - r[0] - 7, "class":"ticklbl", "text-anchor":"middle" }, rings).textContent = r[1];
+});
+
+/* beam line */
+el("line", { x1:300, y1:18, x2:300, y2:582, "class":"beam" }, rings);
+
+/* calorimeter wedges: deposited energy bars, red */
+var ENERGY = [0.22,0.41,0.68,0.35,0.9,0.54,0.30,0.76,0.47,0.62,0.28,0.85,0.39,0.58,0.72,0.33];
+ENERGY.forEach(function(v, i){
+  var a0 = -90 + i * 22.5 + 2.6;
+  var a1 = a0 + 22.5 - 5.2;
+  var rIn = 210, rOut = 210 + v * 50;
+  var p = function(deg, r){
+    var rad = deg * Math.PI / 180;
+    return [300 + Math.cos(rad) * r, 300 + Math.sin(rad) * r];
+  };
+  var A = p(a0, rIn), B = p(a1, rIn), C = p(a1, rOut), D = p(a0, rOut);
+  el("path", {
+    d: "M" + A[0] + "," + A[1] + "L" + B[0] + "," + B[1] + "L" + C[0] + "," + C[1] + "L" + D[0] + "," + D[1] + "Z",
+    fill: "rgba(255,68,56," + (0.28 + v * 0.6) + ")",
+    stroke: "rgba(255,68,56,.6)", "stroke-width": ".7"
+  }, wedges);
+});
+
+/* tracks out of the collision */
+var TRACK = [
+  { a:-38, r:264, c:"y", w:1.9 },
+  { a:-14, r:262, c:"", w:1.3 },
+  { a:9,   r:258, c:"", w:1.5 },
+  { a:31,  r:250, c:"", w:1.1 },
+  { a:58,  r:262, c:"y", w:1.7 },
+  { a:124, r:246, c:"", w:1.2 },
+  { a:151, r:262, c:"", w:1.5 },
+  { a:186, r:256, c:"y", w:1.4 },
+  { a:214, r:240, c:"", w:1.1 },
+  { a:247, r:264, c:"", w:1.6 },
+  { a:288, r:252, c:"y", w:1.2 },
+  { a:322, r:258, c:"", w:1.3 }
+];
+TRACK.forEach(function(t, i){
+  var rad = t.a * Math.PI / 180;
+  /* curve: slight bend, like a charged track */
+  var bend = (i % 2 ? 1 : -1) * 26;
+  var mx = 300 + Math.cos(rad) * t.r * 0.55 - Math.sin(rad) * bend * 0.42;
+  var my = 300 + Math.sin(rad) * t.r * 0.55 + Math.cos(rad) * bend * 0.42;
+  var ex = 300 + Math.cos(rad) * t.r;
+  var ey = 300 + Math.sin(rad) * t.r;
+  var path = el("path", {
+    d: "M300,300 Q" + mx + "," + my + " " + ex + "," + ey,
+    "class": "track " + t.c,
+    "stroke-width": t.w
+  }, tracks);
+  path.style.animationDelay = (i * 45) + "ms";
+});
+
+/* call-outs pinned to a couple of tracks */
+function callout(x, y, tx, ty, label, value, anchor){
+  var g = el("g", {}, calls);
+  el("line", { x1:x, y1:y, x2:tx, y2:ty, stroke:"rgba(157,176,194,.4)", "stroke-width":".8" }, g);
+  el("circle", { cx:x, cy:y, r:2.4, fill:"#ffd400" }, g);
+  el("text", { x:anchor === "end" ? tx - 5 : tx + 5, y:ty - 2, "class":"lbl", "text-anchor":anchor || "start" }, g).textContent = label;
+  el("text", { x:anchor === "end" ? tx - 5 : tx + 5, y:ty + 12, "class":"val", "text-anchor":anchor || "start" }, g).textContent = value;
+}
+callout(300 + Math.cos(-38*Math.PI/180)*210, 300 + Math.sin(-38*Math.PI/180)*210, 470, 96, "link", "/f/a4e3c1", "start");
+callout(300 + Math.cos(151*Math.PI/180)*205, 300 + Math.sin(151*Math.PI/180)*205, 118, 500, "expires", "7d", "end");
+
+/* ---------- layers ---------- */
+var LAYERS = [
+  ["Resource","Request headers","content-type decides how it is served back","edge"],
+  ["Bucket","Cloudflare R2","one bucket binding, no egress fee","BUCKET"],
+  ["Object","files/{id}","metadata rides with the object, not a database","r2"],
+  ["Link","/f/{id}","preview page to browsers, bytes to clients","public"]
+];
+var ll = document.getElementById("layers-list");
+LAYERS.forEach(function(l, i){
+  var d = document.createElement("div"); d.className = "ly";
+  d.innerHTML = '<span class="n">' + String(i+1).padStart(2,"0") + '</span><div><b>' + l[0] + ' &middot; ' + l[1] + '</b><span>' + l[2] + '</span></div><span class="v">' + l[3] + '</span>';
+  ll.appendChild(d);
+});
+
+/* ---------- decay ---------- */
+var EXP = [["1h",3600e3],["6h",6*3600e3],["12h",12*3600e3],["1d",864e5],["3d",3*864e5],["7d",7*864e5],["30d",30*864e5],["90d",90*864e5],["never",null]];
+var dec = document.getElementById("decay-list"), roD = document.getElementById("ro-date");
+function ro(ms){
+  roD.textContent = ms === null ? "never" : new Date(Date.now() + ms).toISOString().replace("T"," ").slice(0,16) + " UTC";
+}
+EXP.forEach(function(e){
+  var b = document.createElement("button");
+  b.type = "button"; b.className = "dr";
+  b.setAttribute("aria-pressed", e[0] === "7d" ? "true" : "false");
+  var w = e[1] ? Math.min(100, Math.max(6, Math.log(e[1]/3600e3)/Math.log(2160) * 100)) : 100;
+  b.innerHTML = '<span class="dl">' + e[0] + '</span><span class="dbar"><i style="width:' + w + '%"></i></span><span class="dd">' + (e[1] ? "" : "manual") + '</span>';
+  b.onclick = function(){
+    Array.prototype.forEach.call(dec.children, function(c){ c.setAttribute("aria-pressed","false"); });
+    b.setAttribute("aria-pressed","true");
+    ro(e[1]);
+  };
+  dec.appendChild(b);
+});
+ro(7*864e5);
+
+/* ---------- code tabs ---------- */
+var T = [
+  { v:"PUT", p:"/api/upload", t:"stream in",
+    rq:"curl -X PUT 'https://cdn.nullstacks.workers.dev/api/upload?filename=clip.mp4&expires=7d' \\\n  -H 'authorization: Bearer $KEY' \\\n  -H 'content-type: video/mp4' \\\n  --data-binary @clip.mp4",
+    rs:"{\n  \"id\": \"a4e3c1...\",\n  \"name\": \"clip.mp4\",\n  \"size\": 184320000,\n  \"expires_at\": \"2026-11-06T14:43Z\",\n  \"download_url\": \"/api/files/a4e3c1...\"\n}" },
+  { v:"GET", p:"/api/files", t:"list + search",
+    rq:"curl 'https://cdn.nullstacks.workers.dev/api/files?search=clip&sort=size&order=desc' \\\n  -H 'authorization: Bearer $KEY'",
+    rs:"{\n  \"data\": [ { \"id\": \"a4e3c1...\", \"name\": \"clip.mp4\", \"size\": 184320000 } ],\n  \"pagination\": { \"cursor\": null, \"has_more\": false },\n  \"count\": 1\n}" },
+  { v:"GET", p:"/api/files/:id", t:"range bytes",
+    rq:"curl 'https://cdn.nullstacks.workers.dev/api/files/a4e3c1...' \\\n  -H 'range: bytes=0-1023' \\\n  -H 'authorization: Bearer $KEY'",
+    rs:"HTTP/1.1 206 Partial Content\ncontent-range: bytes 0-1023/184320000\naccept-ranges: bytes\ncontent-type: video/mp4" },
+  { v:"DEL", p:"/api/files", t:"bulk up to 1000",
+    rq:"curl -X DELETE 'https://cdn.nullstacks.workers.dev/api/files' \\\n  -H 'authorization: Bearer $KEY' \\\n  -H 'content-type: application/json' \\\n  -d '{\"ids\":[\"a4e3c1...\",\"d4e5f6...\"]}'",
+    rs:"{ \"deleted\": 2 }" }
+];
+var ct = document.getElementById("ctabs"), cp = document.getElementById("cpane");
+function esc(v){ var d = document.createElement("div"); d.textContent = String(v == null ? "" : v); return d.innerHTML; }
+function paint(txt){
+  var o = "";
+  txt.split("\n").forEach(function(l){
+    var s = esc(l);
+    if (/^curl|^HTTP/.test(l)) o += '<span class="a">' + s + '</span>\n';
+    else if (/^\s/.test(l)) o += '<span class="b">' + s + '</span>\n';
+    else o += '<span class="m">' + s + '</span>\n';
+  });
+  return o;
+}
+function sel(i){
+  Array.prototype.forEach.call(ct.children, function(c,j){ c.setAttribute("aria-selected", j === i ? "true" : "false"); });
+  var x = T[i];
+  cp.innerHTML = '<div class="plbl">Request &middot; ' + esc(x.t) + '</div><pre>' + paint(x.rq) + '</pre><div class="plbl" style="margin-top:18px">Response</div><pre>' + paint(x.rs) + '</pre>';
+}
+T.forEach(function(x,i){
+  var b = document.createElement("button");
+  b.type = "button"; b.className = "ct"; b.setAttribute("role","tab");
+  b.innerHTML = '<span class="vb">' + x.v + '</span>' + esc(x.p);
+  b.onclick = function(){ sel(i); };
+  ct.appendChild(b);
+});
+sel(0);
+
+/* ---------- uploader / event record ---------- */
+var MAX = 100*1024*1024, STORE = "cdn.links.v4";
+var dpr = document.getElementById("dropper"), pk = document.getElementById("file-input"),
+    rec = document.getElementById("record"), wait = [], busy = false;
+function rd(){ try { var l = JSON.parse(localStorage.getItem(STORE) || "[]"); return Array.isArray(l) ? l : []; } catch(e) { return []; } }
+function wr(l){ try { localStorage.setItem(STORE, JSON.stringify(l)); } catch(e) {} }
+function liveL(l){ var n = Date.now(); return l.filter(function(e){ return e && e.id && e.url && (!e.expires_at || Date.parse(e.expires_at) > n); }); }
+function left(iso){
+  if (!iso) return "no expiry";
+  var d = Date.parse(iso) - Date.now();
+  if (d <= 0) return "expired";
+  var m = Math.floor(d/6e4), h = Math.floor(m/60), dd = Math.floor(h/24);
+  return dd >= 2 ? dd + "d " + (h%24) + "h" : h >= 1 ? h + "h " + (m%60) + "m" : m + "m";
+}
+function fmt(b){ b = Number(b) || 0; if (!b) return "0 B"; var u = ["B","KB","MB","GB","TB"], i = Math.min(Math.floor(Math.log(b)/Math.log(1024)),4); return (b/Math.pow(1024,i)).toFixed(i?1:0) + " " + u[i]; }
+function toast(msg){ var e = document.getElementById("toast"); e.textContent = msg; e.classList.add("on"); clearTimeout(window.__t); window.__t = setTimeout(function(){ e.classList.remove("on"); }, 2400); }
+function copy(txt){ if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function(){ toast("Link copied"); }, function(){ window.prompt("Copy", txt); }); else window.prompt("Copy", txt); }
+var ICO = {
+  down: '<path d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  out: '<path d="M14 4h6v6m0-6L10 14M18 14v5H5V5h5"/>'
+};
+function ic(n){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + ICO[n] + '</svg>'; }
+
+function row(e){
+  var d = document.createElement("div");
+  d.className = "rq";
+  d.innerHTML = '<div style="min-width:0"><div class="nm">' + esc(e.name) + '</div><div class="k">' + fmt(e.size) + ' &middot; <b>/f/' + esc(String(e.id).slice(0,6)) + '</b> &middot; ' + left(e.expires_at) + ' left</div></div>';
+  var a = document.createElement("div"); a.className = "acts";
+  function B(title, glyph, fn){
+    var x = document.createElement(fn ? "button" : "a");
+    x.className = "ib"; x.title = title; x.innerHTML = ic(glyph);
+    if (fn) { x.type = "button"; x.onclick = fn; }
+    else { x.href = title === "Open" ? e.url : e.url + "?download=1"; if (title === "Open") { x.target = "_blank"; x.rel = "noopener"; } else { x.setAttribute("download", e.name || ""); } }
+    a.appendChild(x);
+  }
+  B("Open","out"); B("Download","down"); B("Copy link","copy",function(){ copy(e.url); });
+  B("Forget","x",function(){ wr(liveL(rd()).filter(function(z){ return z.id !== e.id; })); render(); });
+  d.appendChild(a);
+  return d;
+}
+function render(){
+  var l = liveL(rd()); wr(l);
+  rec.innerHTML = "";
+  if (!l.length) { rec.innerHTML = '<div class="empty">nothing dropped yet &mdash; the first file lands here</div>'; return; }
+  l.forEach(function(e){ rec.appendChild(row(e)); });
+}
+pk.onchange = function(){ enq(pk.files); pk.value = ""; };
+["dragenter","dragover"].forEach(function(n){ dpr.addEventListener(n, function(e){ e.preventDefault(); dpr.classList.add("over"); }); });
+["dragleave","drop"].forEach(function(n){
+  dpr.addEventListener(n, function(e){
+    e.preventDefault(); dpr.classList.remove("over");
+    if (n === "drop" && e.dataTransfer && e.dataTransfer.files.length) enq(e.dataTransfer.files);
+  });
+});
+document.addEventListener("paste", function(e){ if (e.clipboardData && e.clipboardData.files.length) enq(e.clipboardData.files); });
+["dragover","drop"].forEach(function(n){ window.addEventListener(n, function(e){ if (!dpr.contains(e.target)) e.preventDefault(); }); });
+function enq(l){ for (var i = 0; i < l.length; i++) wait.push(l[i]); pump(); }
+function pump(){ if (busy || !wait.length) return; busy = true; send(wait.shift(), function(){ busy = false; pump(); }); }
+function send(file, done){
+  var c = document.createElement("div");
+  c.className = "rq";
+  c.innerHTML = '<div style="min-width:0"><div class="nm">' + esc(file.name) + '</div><div class="k"><span class="qmeter"><i></i></span> <span class="st">queued</span></div></div>';
+  if (rec.querySelector(".empty")) rec.innerHTML = "";
+  rec.insertBefore(c, rec.firstChild);
+  var st = c.querySelector(".st"), fl = c.querySelector(".qmeter i");
+  function fail(m){ st.textContent = "failed"; st.style.color = "var(--red)"; var p = document.createElement("div"); p.className = "k"; p.style.color = "var(--red)"; p.textContent = m; c.querySelector("div").appendChild(p); }
+  if (file.size > MAX) { fail("Over the 100 MB limit. This one is " + fmt(file.size) + "."); return done(); }
+  st.textContent = "0%";
+  var x = new XMLHttpRequest();
+  x.open("PUT", HOST + "/public/upload?filename=" + encodeURIComponent(file.name));
+  x.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+  x.upload.onprogress = function(e){ if (e.lengthComputable) { var pc = Math.round(e.loaded/e.total*100); fl.style.width = pc + "%"; st.textContent = pc + "%"; } };
+  x.onload = function(){
+    var d = {}; try { d = JSON.parse(x.responseText); } catch(z) {}
+    if (x.status >= 200 && x.status < 300 && d.url) {
+      c.remove();
+      var l = liveL(rd()).filter(function(z){ return z.id !== d.id; });
+      l.unshift({ id:d.id, name:d.name, size:d.size, content_type:d.content_type, url:d.url, expires_at:d.expires_at });
+      wr(l.slice(0,100)); render(); toast("Link ready");
+    } else fail((d.error && d.error.message) || "Upload failed. Try again.");
+    done();
+  };
+  x.onerror = function(){ fail("Connection dropped before the upload finished."); done(); };
+  x.send(file);
+}
+render();
+
+/* ---------- login ---------- */
+var f = document.getElementById("login"), ki = document.getElementById("key"),
+    er = document.getElementById("login-err"), lb = document.getElementById("login-label"),
+    bt = f.querySelector(".btn.pri");
+document.getElementById("reveal").onclick = function(){ ki.type = ki.type === "password" ? "text" : "password"; };
+f.onsubmit = function(ev){
+  ev.preventDefault();
+  var t = ki.value.trim(); er.classList.remove("on");
+  if (!t) { er.textContent = "Enter your API key to continue."; er.classList.add("on"); return; }
+  bt.disabled = true; lb.textContent = "Signing in...";
+  fetch(HOST + "/auth/login", { method:"POST", headers:{ "Content-Type":"application/json" }, credentials:"include", body: JSON.stringify({ token: t }) })
+    .then(function(r){ return r.json().then(function(d){ if (!r.ok) throw new Error((d.error && d.error.message) || "Login failed."); return d; }); })
+    .then(function(){ location.href = HOST + "/dashboard"; })
+    .catch(function(x){ er.textContent = x.message; er.classList.add("on"); bt.disabled = false; lb.textContent = "Sign in"; });
+};
+})();
+
+</script>
+</body>
+</html>
